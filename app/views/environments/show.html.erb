@@ -105,6 +105,7 @@
           <span style="text-align: right;">Details</span>
         </div>
         <% total_checks = @drift_checks.size %>
+        <% can_view_plan = policy(@environment).view_plan? %>
         <% @drift_checks.each_with_index do |check, idx| %>
           <div class="check-row" data-controller="expandable">
             <div class="check-summary" data-action="click->expandable#toggle">
@@ -139,16 +140,18 @@
                 <%= check.created_at.strftime('%b %d, %I:%M %p') %>
               </span>
               <span class="col-actions">
-                <% if check.raw_output.present? %>
+                <% if check.raw_output.present? && can_view_plan %>
                   <button class="expand-btn" data-expandable-target="button">
                     <span class="expand-icon">▶</span> Plan
                   </button>
+                <% elsif check.raw_output.present? %>
+                  <span class="no-output plan-restricted" title="Plan output is restricted to higher roles">Plan output restricted</span>
                 <% else %>
                   <span class="no-output">—</span>
                 <% end %>
               </span>
             </div>
-            <% if check.raw_output.present? %>
+            <% if check.raw_output.present? && can_view_plan %>
               <div class="check-output" data-expandable-target="content" hidden>
                 <pre><code><%= check.raw_output %></code></pre>
               </div>

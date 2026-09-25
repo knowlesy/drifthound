@@ -112,6 +112,33 @@ PUBLIC_MODE=true
 - **Private mode (recommended)**: Production deployments, sensitive infrastructure data, compliance requirements
 - **Public mode**: Internal team dashboards, demo instances, open-source project monitoring
 
+### PLAN_OUTPUT_MIN_ROLE
+
+Minimum role required to see the raw Terraform plan output on an environment page. Plan output can include resource attributes and values that you may not want every viewer to read.
+
+**Required:** No
+**Default:** `viewer` (everyone who can open the environment page sees plan output, the same as before this setting existed)
+**Options:** `viewer`, `editor`, `admin`
+
+```bash
+# Only editors and admins can expand plan output in the web UI
+PLAN_OUTPUT_MIN_ROLE=editor
+```
+
+**Behavior:**
+
+| `PLAN_OUTPUT_MIN_ROLE` | Anonymous (public mode) | Viewer | Editor | Admin |
+|------------------------|-------------------------|--------|--------|-------|
+| `viewer` (default) | ✅ Plan output | ✅ Plan output | ✅ Plan output | ✅ Plan output |
+| `editor` | 🔒 Restricted | 🔒 Restricted | ✅ Plan output | ✅ Plan output |
+| `admin` | 🔒 Restricted | 🔒 Restricted | 🔒 Restricted | ✅ Plan output |
+
+**Notes:**
+- Users below the minimum role still see the environment's status, check history, change counts and durations; each check shows "Plan output restricted" in place of the Plan button, and the output is not sent to the browser.
+- Anonymous visitors in public mode count as below `viewer`: they see plan output only when the minimum role is `viewer`.
+- The value is case-insensitive. Any other value stops the application at boot with an error.
+- This setting applies to the web UI only. The token-authenticated API endpoint `GET /api/v1/projects/:project_key/environments/:key/drift` still returns `raw_output` to any valid API token.
+
 ## Admin Authentication
 
 DriftHound includes a web-based admin authentication system to protect destructive operations like deleting projects and environments. Admin credentials are configured via environment variables.
@@ -547,6 +574,7 @@ SECRET_KEY_BASE=340b6113695da1baed5d5b7945bff4dc4ab86b75f602c5183624c1b87ffc17d1
 
 # Access Control (private by default)
 PUBLIC_MODE=false
+PLAN_OUTPUT_MIN_ROLE=viewer
 
 # Admin Authentication (required in production)
 ADMIN_EMAIL=admin@example.com
