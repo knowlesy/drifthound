@@ -326,6 +326,31 @@ location / {
 
 Make sure the DriftHound service itself is not reachable from outside the proxy, for example with a Kubernetes NetworkPolicy or by binding it to a private network.
 
+### Example: Microsoft Entra ID groups behind oauth2-proxy
+
+Using Microsoft Entra ID as the identity provider behind oauth2-proxy.
+
+Configure oauth2-proxy with its `azure` or generic `oidc` provider against the Entra tenant, with `set_xauthrequest = true` so it emits the `X-Auth-Request-Email` and `X-Auth-Request-Groups` headers DriftHound reads. The Entra app registration must be set to emit group claims (`groupMembershipClaims`); groups then arrive as object IDs, not display names, so the `TRUSTED_PROXY_*_GROUPS` values below are object IDs. With `groupMembershipClaims` set to `ApplicationGroup`, only groups assigned to the app registration are emitted. A token whose group count is over Entra's overage limit carries no groups claim at all, so an affected user falls through to `TRUSTED_PROXY_DEFAULT_ROLE`, or is refused if that is unset.
+
+nginx ingress annotations:
+
+```yaml
+nginx.ingress.kubernetes.io/auth-url: "https://$host/oauth2/auth"
+nginx.ingress.kubernetes.io/auth-signin: "https://$host/oauth2/start?rd=$escaped_request_uri"
+nginx.ingress.kubernetes.io/auth-response-headers: "X-Auth-Request-Email,X-Auth-Request-Groups"
+```
+
+DriftHound environment:
+
+```bash
+TRUSTED_PROXY_AUTH_ENABLED=true
+TRUSTED_PROXY_ADMIN_GROUPS=00000000-0000-0000-0000-000000000001
+TRUSTED_PROXY_EDITOR_GROUPS=00000000-0000-0000-0000-000000000002
+TRUSTED_PROXY_VIEWER_GROUPS=00000000-0000-0000-0000-000000000003
+```
+
+With this configuration, users in the admin group get the admin role, users in the editor group get the editor role, and users in the viewer group get the viewer role, all re-evaluated on every request.
+
 ## Database Configuration
 
 DriftHound uses PostgreSQL and supports multiple databases for different concerns (primary, cache, queue, cable).
