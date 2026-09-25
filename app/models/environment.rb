@@ -1,4 +1,6 @@
 class Environment < ApplicationRecord
+  NAME_MAX_LENGTH = 255
+
   belongs_to :project
   has_many :drift_checks, dependent: :destroy
   has_many :notification_states, dependent: :destroy
@@ -16,7 +18,7 @@ class Environment < ApplicationRecord
     error: 3
   }
 
-  validates :name, presence: true
+  validates :name, presence: true, length: { maximum: NAME_MAX_LENGTH }
   validates :key, presence: true,
                   uniqueness: { scope: :project_id },
                   format: { with: /\A[a-z0-9_-]+\z/i, message: "only allows alphanumeric characters, dashes, and underscores" }
@@ -46,9 +48,11 @@ class Environment < ApplicationRecord
     )
   end
 
-  def self.find_or_create_by_key(project, key)
-    project.environments.find_or_create_by(key: key) do |environment|
-      environment.name = key.titleize
+  def self.find_or_create_by_key(project, key, name: nil)
+    environment = project.environments.find_or_create_by!(key: key) do |env|
+      env.name = name.presence || key.titleize
     end
+    environment.update!(name: name) if name.present? && environment.persisted? && environment.name != name
+    environment
   end
 end

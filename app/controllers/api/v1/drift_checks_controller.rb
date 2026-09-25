@@ -2,8 +2,13 @@ module Api
   module V1
     class DriftChecksController < BaseController
       def create
+        if params[:environment_name].to_s.length > Environment::NAME_MAX_LENGTH
+          return render json: { error: "environment_name is too long (maximum is #{Environment::NAME_MAX_LENGTH} characters)" },
+                        status: :unprocessable_entity
+        end
+
         project = Project.find_or_create_by_key(params[:project_key])
-        environment = Environment.find_or_create_by_key(project, params[:environment_key])
+        environment = Environment.find_or_create_by_key(project, params[:environment_key], name: params[:environment_name])
 
         # Set project repository only if not already set (can be updated via GUI later)
         if params[:repository].present? && project.repository.blank?

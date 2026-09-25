@@ -68,6 +68,7 @@ docker run --rm -v "$(pwd)":/infra -w /infra ghcr.io/drifthoundhq/drifthound:v0.
 | `--tool`          | Yes      | `terraform`, `terragrunt`, or `opentofu`     |
 | `--project`       | Yes      | Project key                                  |
 | `--environment`   | Yes      | Environment key                              |
+| `--environment-name` | No    | Environment display name. Defaults to the titleized environment key. When given, it also renames an existing environment. |
 | `--token`         | Yes      | API token                                    |
 | `--api-url`       | Yes      | DriftHound API base URL                      |
 | `--dir`           | No       | Directory to run the tool in (default: `.`). Stored in environment on first call only; update via GUI. |

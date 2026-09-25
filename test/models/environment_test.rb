@@ -86,6 +86,55 @@ class EnvironmentTest < ActiveSupport::TestCase
     end
   end
 
+  test "find_or_create_by_key uses explicit name for new environment" do
+    environment = Environment.find_or_create_by_key(@project, "prod-eu-west-1", name: "Production EU West 1")
+
+    assert_equal "prod-eu-west-1", environment.key
+    assert_equal "Production EU West 1", environment.name
+  end
+
+  test "find_or_create_by_key falls back to titleized key when name is blank" do
+    environment = Environment.find_or_create_by_key(@project, "my-staging-env", name: "")
+
+    assert_equal "My Staging Env", environment.name
+  end
+
+  test "find_or_create_by_key keeps existing name when no name is given" do
+    existing = @project.environments.create!(name: "Custom Name", key: "custom-env")
+
+    found = Environment.find_or_create_by_key(@project, "custom-env", name: nil)
+
+    assert_equal existing.id, found.id
+    assert_equal "Custom Name", found.reload.name
+  end
+
+  test "find_or_create_by_key renames existing environment when name is given" do
+    existing = @project.environments.create!(name: "Prod Eu West 1", key: "prod-eu-west-1")
+
+    assert_no_difference "Environment.count" do
+      Environment.find_or_create_by_key(@project, "prod-eu-west-1", name: "Production EU West 1")
+    end
+
+    assert_equal "Production EU West 1", existing.reload.name
+  end
+
+  test "is invalid with a name longer than 255 characters" do
+    environment = @project.environments.build(name: "a" * 256, key: "long-name")
+
+    assert_not environment.valid?
+    assert_includes environment.errors[:name], "is too long (maximum is 255 characters)"
+  end
+
+  test "is valid with a name of exactly 255 characters" do
+    assert @project.environments.build(name: "a" * 255, key: "long-name").valid?
+  end
+
+  test "find_or_create_by_key raises when the name is too long" do
+    assert_raises ActiveRecord::RecordInvalid do
+      Environment.find_or_create_by_key(@project, "long-name", name: "a" * 256)
+    end
+  end
+
   test "has many drift_checks" do
     environment = @project.environments.create!(name: "Test", key: "test")
     environment.drift_checks.create!(status: :ok)
