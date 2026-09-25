@@ -35,4 +35,34 @@ class ApiTokenTest < ActiveSupport::TestCase
     found = ApiToken.authenticate(nil)
     assert_nil found
   end
+
+  test "access defaults to write" do
+    token = ApiToken.create!(name: "default-access")
+    assert_equal "write", token.access
+    assert_not token.read_only?
+  end
+
+  test "read access is read only" do
+    token = ApiToken.create!(name: "reader", access: "read")
+    assert token.read_only?
+  end
+
+  test "rejects unknown access" do
+    token = ApiToken.new(name: "bad", access: "admin")
+    assert_not token.valid?
+    assert_includes token.errors[:access], "is not included in the list"
+  end
+
+  test "rejects blank access" do
+    token = ApiToken.new(name: "blank", access: nil)
+    assert_not token.valid?
+  end
+
+  test "access scopes filter tokens" do
+    reader = ApiToken.create!(name: "reader", access: "read")
+    writer = ApiToken.create!(name: "writer", access: "write")
+    assert_includes ApiToken.access_read, reader
+    assert_not_includes ApiToken.access_read, writer
+    assert_includes ApiToken.access_write, writer
+  end
 end

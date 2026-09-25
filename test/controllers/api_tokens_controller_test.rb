@@ -48,6 +48,38 @@ class ApiTokensControllerTest < ActionDispatch::IntegrationTest
     assert token.token.present?
   end
 
+  test "admin creates write token by default" do
+    sign_in_as(@admin)
+    post api_tokens_path, params: { api_token: { name: "Default Access" } }
+    assert_equal "write", ApiToken.find_by(name: "Default Access").access
+  end
+
+  test "admin can create read only api token" do
+    sign_in_as(@admin)
+    assert_difference("ApiToken.count", 1) do
+      post api_tokens_path, params: { api_token: { name: "Dashboard", access: "read" } }
+    end
+    assert_redirected_to api_tokens_path
+    assert ApiToken.find_by(name: "Dashboard").read_only?
+  end
+
+  test "cannot create api token with unknown access" do
+    sign_in_as(@admin)
+    assert_no_difference("ApiToken.count") do
+      post api_tokens_path, params: { api_token: { name: "Bad", access: "admin" } }
+    end
+    assert_response :unprocessable_entity
+  end
+
+  test "index shows token access" do
+    ApiToken.create!(name: "Reporting", access: "read")
+    sign_in_as(@admin)
+    get api_tokens_path
+    assert_select "select[name=?]", "api_token[access]"
+    assert_select ".col-access", text: "Read only"
+    assert_select ".col-access", text: "Read and write"
+  end
+
   test "editor cannot create api token" do
     sign_in_as(@editor)
     assert_no_difference("ApiToken.count") do
