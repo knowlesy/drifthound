@@ -267,6 +267,65 @@ GITHUB_TEAM_EDITOR=infrastructure-team,platform-engineers,sre
 GITHUB_TEAM_VIEWER=developers,contractors
 ```
 
+## Trusted Proxy Authentication
+
+DriftHound can trust the identity asserted by an authenticating reverse proxy, such as [oauth2-proxy](https://oauth2-proxy.github.io/oauth2-proxy/) in front of nginx `auth_request`. The proxy handles single sign-on with your identity provider and passes the user's email and groups to DriftHound in request headers. DriftHound then finds or creates the user by email and assigns a role from the groups, so access is controlled by DriftHound's own viewer, editor and admin roles rather than all-or-nothing at the proxy.
+
+This feature is **disabled by default**. While it is disabled, the headers are ignored entirely.
+
+> **Security warning:** only enable trusted proxy authentication when DriftHound is reachable exclusively through a proxy that authenticates every request and **strips or overwrites any client-supplied copies of the identity headers**. If a client can reach DriftHound directly, or the proxy forwards headers sent by the client, anyone can log in as any user by setting the headers themselves.
+
+> **Account linking warning:** a proxy-supplied email that matches an existing DriftHound user, including a local password user or a GitHub OAuth user, signs in as that user, and that user's role is then set from the proxy groups. DriftHound does not check that the address belongs to the person at the proxy. Your identity provider must only issue verified email addresses; if users can set or change their own unverified email there, they can take over any DriftHound account.
+
+### Enabling Trusted Proxy Authentication
+
+```bash
+TRUSTED_PROXY_AUTH_ENABLED=true
+TRUSTED_PROXY_ADMIN_GROUPS=drifthound-admins
+TRUSTED_PROXY_EDITOR_GROUPS=drifthound-editors
+TRUSTED_PROXY_VIEWER_GROUPS=drifthound-viewers
+```
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TRUSTED_PROXY_AUTH_ENABLED` | `false` | Set to `true` to read the user's identity from proxy headers |
+| `TRUSTED_PROXY_EMAIL_HEADER` | `X-Auth-Request-Email` | Header containing the user's email address |
+| `TRUSTED_PROXY_GROUPS_HEADER` | `X-Auth-Request-Groups` | Header containing the user's groups, comma-separated |
+| `TRUSTED_PROXY_ADMIN_GROUPS` | _(empty)_ | Comma-separated groups granted the `admin` role |
+| `TRUSTED_PROXY_EDITOR_GROUPS` | _(empty)_ | Comma-separated groups granted the `editor` role |
+| `TRUSTED_PROXY_VIEWER_GROUPS` | _(empty)_ | Comma-separated groups granted the `viewer` role |
+| `TRUSTED_PROXY_DEFAULT_ROLE` | _(unset)_ | Role (`viewer`, `editor` or `admin`) for users in no mapped group. When unset, those users are refused |
+
+**Notes:**
+- Group names are case-insensitive. Use whatever values your proxy sends, for example group names or group object IDs.
+- If a user belongs to several mapped groups, they receive the highest privilege role.
+- A user whose groups match no mapping is refused with `403 Forbidden`, unless `TRUSTED_PROXY_DEFAULT_ROLE` is set, in which case they receive that role.
+- The role is re-evaluated on every request, so group changes at the identity provider take effect immediately.
+- The email header is trimmed and lowercased before use, and new users are stored with that normalised email.
+- A user is matched when their stored email, trimmed and lowercased, equals the normalised header value. An existing password or GitHub user with that email is reused and their role is updated from the groups.
+- If more than one existing user matches (for example `Alice@example.com` and `alice@example.com`), the request is refused with `403 Forbidden` and an error is logged, rather than picking one. Remove or rename the duplicate account to resolve it.
+- When the email header is absent, DriftHound falls back to its normal session login. Logging out of DriftHound does not end the proxy session; sign out at the proxy instead.
+- API token authentication for `/api/v1` is not affected by these headers.
+
+### Example: oauth2-proxy with nginx
+
+Configure oauth2-proxy to pass identity headers to the upstream (for example `--set-xauthrequest=true`, which exposes `X-Auth-Request-Email` and `X-Auth-Request-Groups`), then copy them from the `auth_request` response in nginx. Setting them explicitly from `$upstream_http_*` variables overwrites any value sent by the client:
+
+```nginx
+location / {
+  auth_request /oauth2/auth;
+
+  auth_request_set $email  $upstream_http_x_auth_request_email;
+  auth_request_set $groups $upstream_http_x_auth_request_groups;
+  proxy_set_header X-Auth-Request-Email  $email;
+  proxy_set_header X-Auth-Request-Groups $groups;
+
+  proxy_pass http://drifthound:3000;
+}
+```
+
+Make sure the DriftHound service itself is not reachable from outside the proxy, for example with a Kubernetes NetworkPolicy or by binding it to a private network.
+
 ## Database Configuration
 
 DriftHound uses PostgreSQL and supports multiple databases for different concerns (primary, cache, queue, cable).
@@ -561,6 +620,12 @@ GITHUB_ORG=your-organization
 GITHUB_TEAM_ADMIN=platform-admins,security-team
 GITHUB_TEAM_EDITOR=platform-editors,developers
 GITHUB_TEAM_VIEWER=read-only
+
+# Trusted proxy authentication (optional, only behind a proxy that strips client identity headers)
+TRUSTED_PROXY_AUTH_ENABLED=false
+TRUSTED_PROXY_ADMIN_GROUPS=platform-admins
+TRUSTED_PROXY_EDITOR_GROUPS=platform-editors
+TRUSTED_PROXY_DEFAULT_ROLE=viewer
 
 # Database
 DRIFTHOUND_DATABASE_PASSWORD=your-secure-db-password

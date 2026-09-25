@@ -4,6 +4,7 @@ module Api
       include ApiAuthenticatable
 
       skip_before_action :verify_authenticity_token
+      skip_before_action :authenticate_from_trusted_proxy
 
       rescue_from ActiveRecord::RecordInvalid do |e|
         render json: { error: e.message }, status: :unprocessable_entity

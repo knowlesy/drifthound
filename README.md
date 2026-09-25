@@ -32,6 +32,7 @@ Live demo site: https://demo.drifthound.io
 - **Web Dashboard**: View all projects and their drift status at a glance
 - **Charts Dashboard**: Visual analytics with interactive charts for drift monitoring
 - **Slack Notifications**: Real-time alerts when drift is detected or resolved
+- **Flexible Authentication**: Email/password, GitHub OAuth, or single sign-on through a trusted authenticating proxy such as oauth2-proxy
 
 ## Requirements
 
@@ -167,6 +168,22 @@ A Helm chart is available for deploying DriftHound to Kubernetes clusters:
 📦 **Helm Chart Repository**: [https://github.com/drifthoundhq/helm-chart/](https://github.com/drifthoundhq/helm-chart/)
 
 For deployment instructions and configuration options, refer to the Helm chart documentation.
+
+### Behind an Authenticating Proxy
+
+DriftHound can sit behind an SSO proxy such as oauth2-proxy and take the user's email and groups from request headers, mapping groups to DriftHound roles. It is disabled by default and must only be enabled behind a proxy that strips client-supplied identity headers:
+
+```bash
+TRUSTED_PROXY_AUTH_ENABLED=true
+TRUSTED_PROXY_EMAIL_HEADER=X-Auth-Request-Email    # default
+TRUSTED_PROXY_GROUPS_HEADER=X-Auth-Request-Groups  # default
+TRUSTED_PROXY_ADMIN_GROUPS=drifthound-admins
+TRUSTED_PROXY_EDITOR_GROUPS=drifthound-editors
+TRUSTED_PROXY_VIEWER_GROUPS=drifthound-viewers
+# TRUSTED_PROXY_DEFAULT_ROLE=viewer  # unset: users in no mapped group are refused
+```
+
+See [Trusted Proxy Authentication](docs/configuration.md#trusted-proxy-authentication) for details.
 
 ---
 
