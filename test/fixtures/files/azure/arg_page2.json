@@ -1,0 +1,77 @@
+{
+  "count": 7,
+  "data": [
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/MC_rg-app_aks-app_westeurope",
+      "name": "MC_rg-app_aks-app_westeurope",
+      "type": "microsoft.resources/subscriptions/resourcegroups",
+      "location": "westeurope",
+      "resourceGroup": "MC_rg-app_aks-app_westeurope",
+      "subscriptionId": "00000000-0000-0000-0000-000000000001",
+      "managedBy": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-app/providers/Microsoft.ContainerService/managedClusters/aks-app",
+      "tags": null
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/MC_rg-app_aks-app_westeurope/providers/Microsoft.Network/loadBalancers/kubernetes",
+      "name": "kubernetes",
+      "type": "microsoft.network/loadbalancers",
+      "location": "westeurope",
+      "resourceGroup": "mc_rg-app_aks-app_westeurope",
+      "subscriptionId": "00000000-0000-0000-0000-000000000001",
+      "managedBy": "",
+      "tags": null
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-app/providers/Microsoft.Compute/disks/osdisk1",
+      "name": "osdisk1",
+      "type": "microsoft.compute/disks",
+      "location": "westeurope",
+      "resourceGroup": "rg-app",
+      "subscriptionId": "00000000-0000-0000-0000-000000000001",
+      "managedBy": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-app/providers/Microsoft.Compute/virtualMachines/vm1",
+      "tags": null
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000002/resourceGroups/rg-sec/providers/Microsoft.KeyVault/vaults/kv-app",
+      "name": "kv-app",
+      "type": "microsoft.keyvault/vaults",
+      "location": "westeurope",
+      "resourceGroup": "rg-sec",
+      "subscriptionId": "00000000-0000-0000-0000-000000000002",
+      "managedBy": "",
+      "tags": null
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000002/resourceGroups/rg-sec",
+      "name": "rg-sec",
+      "type": "microsoft.resources/subscriptions/resourcegroups",
+      "location": "westeurope",
+      "resourceGroup": "rg-sec",
+      "subscriptionId": "00000000-0000-0000-0000-000000000002",
+      "managedBy": "",
+      "tags": null
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000002/resourceGroups/rg-sec/providers/Microsoft.Network/virtualNetworks/vnet-hub",
+      "name": "vnet-hub",
+      "type": "microsoft.network/virtualnetworks",
+      "location": "westeurope",
+      "resourceGroup": "rg-sec",
+      "subscriptionId": "00000000-0000-0000-0000-000000000002",
+      "managedBy": "",
+      "tags": null
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/NetworkWatcherRG",
+      "name": "NetworkWatcherRG",
+      "type": "microsoft.resources/subscriptions/resourcegroups",
+      "location": "westeurope",
+      "resourceGroup": "networkwatcherrg",
+      "subscriptionId": "00000000-0000-0000-0000-000000000001",
+      "managedBy": "",
+      "tags": null
+    }
+  ],
+  "skip_token": null,
+  "total_records": 11
+}

@@ -220,11 +220,309 @@ module DriftHoundCli
     end
   end
 
-  # EXTENSION POINT: add the other sources here, for example "argocd"
+  # Reads the resources Terraform manages out of state JSON. Both layouts are
+  # supported: `terraform show -json` (values.root_module with child_modules)
+  # and raw state v4 as printed by `terraform state pull` (resources[].instances[]).
+  # Only the "id" attribute of managed resources is used, and only when it is an
+  # ARM ID. Composite ids and other *_id attributes are not split or scanned:
+  # that would wrongly mark unrelated resources as managed.
+  module TerraformState
+    ARM_ID = %r{\A/subscriptions/}i.freeze
+
+    def self.normalize(id)
+      id.strip.chomp('/').downcase
+    end
+
+    def self.managed_ids(state)
+      ids = []
+      return ids unless state.is_a?(Hash)
+
+      walk_module(state.dig('values', 'root_module'), ids) if state['values'].is_a?(Hash)
+      collect_state_resources(state['resources'], ids) if state['resources'].is_a?(Array)
+      ids.uniq
+    end
+
+    def self.walk_module(mod, ids)
+      return unless mod.is_a?(Hash)
+
+      Array(mod['resources']).each do |resource|
+        next unless resource.is_a?(Hash) && resource['mode'] == 'managed'
+
+        add_id(resource['values'], ids)
+      end
+      Array(mod['child_modules']).each { |child| walk_module(child, ids) }
+    end
+
+    def self.collect_state_resources(resources, ids)
+      resources.each do |resource|
+        next unless resource.is_a?(Hash) && resource['mode'] == 'managed'
+
+        Array(resource['instances']).each do |instance|
+          add_id(instance['attributes'], ids) if instance.is_a?(Hash)
+        end
+      end
+    end
+
+    def self.add_id(attributes, ids)
+      return unless attributes.is_a?(Hash)
+
+      id = attributes['id']
+      ids << normalize(id) if id.is_a?(String) && id.strip =~ ARM_ID
+    end
+  end
+
+  # Finds resources that exist in Azure but are not in Terraform state.
+  # Collection and diffing both happen here, so the server never receives
+  # credentials or state, only the unmanaged items.
+  class AzureError < StandardError; end
+
+  module Modes
+    class AzureUnmanaged
+      QUERY = "resources | union (resourcecontainers | where type =~ 'microsoft.resources/subscriptions/resourcegroups') " \
+              '| project id, name, type, location, resourceGroup, subscriptionId, managedBy, tags | order by id asc'
+      SUBSCRIPTIONS_QUERY = "resourcecontainers | where type =~ 'microsoft.resources/subscriptions' | project subscriptionId"
+      PAGE_SIZE = 1000
+      MAX_PAGES = 2000
+      STATE_TOOLS = %w[terraform tofu terragrunt].freeze
+      MAX_STDERR = 4000
+      MAX_LISTED = 200
+      TAGS_LIMIT_BYTES = 1800
+      FIELD_LIMITS = { resource_type: 255, name: 255, scope: 255, location: 128 }.freeze
+      IDENTIFIER_LIMIT = 1024
+      RESOURCE_GROUP_ID = %r{\A(/subscriptions/[^/]+/resourcegroups/[^/]+)}i.freeze
+
+      def self.add_options(parser, opts)
+        parser.on('--subscription=ID', 'Azure subscription ID to scan (repeatable, azure tool)') { |v| (opts[:subscriptions] ||= []) << v }
+        parser.on('--state-dir=DIR', 'Directory to run `<state-tool> state pull` in (repeatable, azure tool)') { |v| (opts[:state_dirs] ||= []) << v }
+        parser.on('--state-file=FILE', 'Terraform state or `show -json` file (repeatable, azure tool)') { |v| (opts[:state_files] ||= []) << v }
+        parser.on('--state-tool=TOOL', STATE_TOOLS.join('|') + ' (default terraform, azure tool)') { |v| opts[:state_tool] = v }
+        parser.on('--include-managed-by', 'Also report resources owned by another service via managedBy (azure tool)') { opts[:include_managed_by] = true }
+      end
+
+      def initialize(opts, runner: DEFAULT_RUNNER)
+        @opts = opts
+        @runner = runner
+        @subscriptions = Array(opts[:subscriptions]).map(&:strip).reject(&:empty?).uniq
+        @state_dirs = Array(opts[:state_dirs])
+        @state_files = Array(opts[:state_files])
+        @state_tool = opts[:state_tool] || 'terraform'
+
+        raise UsageError, 'Missing --subscription (at least one is required for --tool=azure)' if @subscriptions.empty?
+        raise UsageError, 'Missing --state-dir or --state-file (at least one is required for --tool=azure)' if @state_dirs.empty? && @state_files.empty?
+        raise UsageError, "Unknown --state-tool (use #{STATE_TOOLS.join(', ')})" unless STATE_TOOLS.include?(@state_tool)
+      end
+
+      def build_payload
+        start_time = Time.now
+        begin
+          items, summary = collect
+          status = 'ok'
+        rescue AzureError => e
+          items = nil
+          status = 'error'
+          summary = "Azure unmanaged resource check failed: #{e.message}"
+        rescue StandardError => e
+          items = nil
+          status = 'error'
+          summary = "Azure unmanaged resource check failed: unexpected #{e.class}: #{e.message}"
+        end
+        puts summary
+        puts "Determined status: #{status}"
+        $stdout.flush
+
+        payload = {
+          source: 'azure',
+          status: status,
+          duration: Time.now - start_time,
+          raw_output: Text.clean(summary)
+        }
+        payload[:directory] = @opts[:dir] if @opts[:dir]
+        payload[:unmanaged_resources] = items if items
+        payload
+      end
+
+      private
+
+      # Returns [unmanaged_items, summary_text]; raises AzureError on any failure
+      def collect
+        managed = read_state_sources
+        raise AzureError, 'no managed resource IDs were found in the state sources (is the state initialised and the right directory used?)' if managed.empty?
+
+        verify_subscriptions
+        rows = query_graph(QUERY)
+        unmanaged, skipped_managed_by, skipped_long = diff(rows, managed)
+        unmanaged.sort_by! { |item| item[:identifier].downcase }
+        items, dropped = Unmanaged.truncate(unmanaged, max: MAX_UNMANAGED_RESOURCES)
+
+        [ items, summary(rows.size, managed.size, skipped_managed_by, skipped_long, unmanaged.size, items, dropped) ]
+      end
+
+      # Every state source must be readable: a partial set would make
+      # everything look unmanaged and raise a false drift alarm.
+      def read_state_sources
+        managed = Set.new
+        @state_dirs.each do |dir|
+          out, err, status = @runner.call([ @state_tool, 'state', 'pull' ], chdir: dir)
+          raise AzureError, "#{@state_tool} state pull failed in #{dir} (exit #{status.exitstatus}): #{clip(err)}" unless status.success?
+
+          managed.merge(parse_state(out, "state pulled from #{dir}"))
+        end
+        @state_files.each do |file|
+          begin
+            text = File.read(file)
+          rescue SystemCallError => e
+            raise AzureError, "cannot read state file #{file}: #{e.class}"
+          end
+          managed.merge(parse_state(text, "state file #{file}"))
+        end
+        managed
+      end
+
+      # The parser error is not reported: it would quote part of the state, which can hold secrets
+      def parse_state(text, label)
+        TerraformState.managed_ids(JSON.parse(text.to_s))
+      rescue JSON::ParserError
+        raise AzureError, "#{label} is not valid JSON"
+      end
+
+      def verify_subscriptions
+        found = query_graph(SUBSCRIPTIONS_QUERY).map { |row| row['subscriptionId'].to_s.downcase }
+        missing = @subscriptions.reject { |sub| found.include?(sub.downcase) }
+        return if missing.empty?
+
+        raise AzureError, "subscription(s) not visible to Resource Graph (check the identity's Reader access): #{missing.join(', ')}"
+      end
+
+      # Pages through `az graph query` until there is no skip token
+      def query_graph(query)
+        rows = []
+        token = nil
+        MAX_PAGES.times do
+          cmd = [ 'az', 'graph', 'query', '-q', query, '--first', PAGE_SIZE.to_s, '--subscriptions', *@subscriptions, '--output', 'json' ]
+          cmd += [ '--skip-token', token ] if token
+          out, err, status = @runner.call(cmd)
+          raise AzureError, "az graph query failed (exit #{status.exitstatus}): #{clip(err)}" unless status.success?
+
+          page_rows, next_token = parse_page(out)
+          rows.concat(page_rows)
+          return rows if next_token.nil?
+          raise AzureError, 'az graph query returned the same skip token twice' if next_token == token
+
+          token = next_token
+        end
+        raise AzureError, "az graph query returned more than #{MAX_PAGES} pages"
+      end
+
+      # `az graph query` prints a Hash with data and skip_token; a bare array is also accepted
+      def parse_page(text)
+        body = JSON.parse(text.to_s)
+        if body.is_a?(Hash)
+          rows = body['data']
+          token = body['skip_token'] || body['skipToken'] || body['$skipToken']
+        else
+          rows = body
+          token = nil
+        end
+        raise AzureError, 'az graph query returned an unexpected JSON shape' unless rows.is_a?(Array) && rows.all? { |row| row.is_a?(Hash) }
+
+        [ rows, token.to_s.strip.empty? ? nil : token.to_s ]
+      rescue JSON::ParserError
+        raise AzureError, 'az graph query did not return valid JSON'
+      end
+
+      # Returns [unmanaged_items, skipped_managed_by_count, skipped_too_long_count]
+      def diff(rows, managed)
+        managed_groups = Set.new
+        unless @opts[:include_managed_by]
+          rows.each do |row|
+            next unless row['id'].is_a?(String) && row['type'].to_s.downcase == 'microsoft.resources/subscriptions/resourcegroups'
+
+            managed_groups << TerraformState.normalize(row['id']) if owned?(row)
+          end
+        end
+
+        items = []
+        skipped_managed_by = 0
+        skipped_long = 0
+        rows.each do |row|
+          id = row['id']
+          next unless id.is_a?(String) && !id.strip.empty?
+
+          normalized = TerraformState.normalize(id)
+          next if managed.include?(normalized)
+
+          unless @opts[:include_managed_by]
+            group = normalized[RESOURCE_GROUP_ID, 1]
+            if owned?(row) || (group && managed_groups.include?(group))
+              skipped_managed_by += 1
+              next
+            end
+          end
+          if id.length > IDENTIFIER_LIMIT
+            skipped_long += 1
+            next
+          end
+
+          items << to_item(row, id)
+        end
+        [ items, skipped_managed_by, skipped_long ]
+      end
+
+      def owned?(row)
+        !row['managedBy'].to_s.strip.empty?
+      end
+
+      def to_item(row, id)
+        metadata = { subscription_id: row['subscriptionId'], managed_by: row['managedBy'], tags: row['tags'] }
+        if metadata.to_json.bytesize > TAGS_LIMIT_BYTES
+          metadata = { subscription_id: row['subscriptionId'], managed_by: row['managedBy'], tags_truncated: true }
+        end
+        {
+          identifier: id.strip,
+          resource_type: limit(row['type'], :resource_type),
+          name: limit(row['name'], :name),
+          scope: limit(row['resourceGroup'], :scope),
+          location: limit(row['location'], :location),
+          metadata: metadata
+        }
+      end
+
+      def limit(value, field)
+        return nil if value.nil?
+
+        value.to_s[0, FIELD_LIMITS.fetch(field)]
+      end
+
+      def summary(row_count, managed_count, skipped_managed_by, skipped_long, unmanaged_total, items, dropped)
+        lines = []
+        lines << "Subscriptions: #{@subscriptions.join(', ')}"
+        lines << "Resource Graph rows: #{row_count}"
+        lines << "Managed resource IDs: #{managed_count} from #{@state_dirs.size + @state_files.size} state source(s)"
+        lines << "Skipped (managedBy or managed resource group): #{skipped_managed_by}" unless @opts[:include_managed_by]
+        lines << "Skipped (identifier longer than #{IDENTIFIER_LIMIT} characters): #{skipped_long}" if skipped_long.positive?
+        lines << "Unmanaged resources: #{unmanaged_total}"
+        lines << "Only the first #{MAX_UNMANAGED_RESOURCES} are reported; #{dropped} more were dropped." if dropped.positive?
+        listed = items.first(MAX_LISTED)
+        unless listed.empty?
+          lines << ''
+          listed.each { |item| lines << item[:identifier] }
+          lines << "... and #{items.size - listed.size} more" if items.size > listed.size
+        end
+        lines.join("\n")
+      end
+
+      def clip(text)
+        Text.clean(text.to_s.strip)[0, MAX_STDERR]
+      end
+    end
+  end
+
+  # EXTENSION POINT: add the other sources here, for example "argocd" => Modes::ArgoUnowned
   MODES = {
     'terraform' => Modes::Plan,
     'terragrunt' => Modes::Plan,
-    'opentofu' => Modes::Plan
+    'opentofu' => Modes::Plan,
+    'azure' => Modes::AzureUnmanaged
   }.freeze
 
   def self.build_parser(opts)
@@ -254,8 +552,9 @@ module DriftHoundCli
     mode = MODES[opts[:tool]]
     raise UsageError, 'Unknown tool' unless mode
 
+    check_mode = mode.new(opts, runner: runner)
     Git.autodetect!(opts, opts[:dir] || Dir.pwd, runner)
-    payload = mode.new(opts, runner: runner).build_payload
+    payload = check_mode.build_payload
     Reporter.post(opts, payload)
   rescue UsageError, OptionParser::ParseError => e
     warn e.message

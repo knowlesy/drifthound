@@ -1,0 +1,96 @@
+{
+  "format_version": "1.0",
+  "terraform_version": "1.9.0",
+  "values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "azurerm_resource_group.app",
+          "mode": "managed",
+          "type": "azurerm_resource_group",
+          "name": "app",
+          "provider_name": "registry.terraform.io/hashicorp/azurerm",
+          "schema_version": 0,
+          "values": {
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000001/resourcegroups/RG-APP",
+            "name": "app"
+          }
+        },
+        {
+          "address": "azurerm_storage_account.app",
+          "mode": "managed",
+          "type": "azurerm_storage_account",
+          "name": "app",
+          "provider_name": "registry.terraform.io/hashicorp/azurerm",
+          "schema_version": 0,
+          "values": {
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-app/providers/Microsoft.Storage/storageAccounts/stapp/",
+            "name": "app"
+          }
+        },
+        {
+          "address": "data.azurerm_key_vault.kv",
+          "mode": "data",
+          "type": "azurerm_key_vault",
+          "name": "kv",
+          "provider_name": "registry.terraform.io/hashicorp/azurerm",
+          "schema_version": 0,
+          "values": {
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000002/resourceGroups/rg-sec/providers/Microsoft.KeyVault/vaults/kv-app",
+            "name": "kv"
+          }
+        }
+      ],
+      "child_modules": [
+        {
+          "address": "module.net",
+          "resources": [
+            {
+              "address": "module.net.azurerm_virtual_network.hub",
+              "mode": "managed",
+              "type": "azurerm_virtual_network",
+              "name": "hub",
+              "provider_name": "registry.terraform.io/hashicorp/azurerm",
+              "schema_version": 0,
+              "values": {
+                "id": "/subscriptions/00000000-0000-0000-0000-000000000002/resourceGroups/RG-SEC/providers/Microsoft.Network/virtualNetworks/VNET-HUB",
+                "name": "hub"
+              }
+            },
+            {
+              "address": "module.net.azurerm_key_vault_secret.pwd",
+              "mode": "managed",
+              "type": "azurerm_key_vault_secret",
+              "name": "pwd",
+              "provider_name": "registry.terraform.io/hashicorp/azurerm",
+              "schema_version": 0,
+              "values": {
+                "id": "https://kv-app.vault.azure.net/secrets/pwd/0123456789abcdef",
+                "name": "pwd"
+              }
+            }
+          ],
+          "child_modules": [
+            {
+              "address": "module.net.module.inner",
+              "resources": [
+                {
+                  "address": "module.net.module.inner.azurerm_subnet.s",
+                  "mode": "managed",
+                  "type": "azurerm_subnet",
+                  "name": "s",
+                  "provider_name": "registry.terraform.io/hashicorp/azurerm",
+                  "schema_version": 0,
+                  "values": {
+                    "id": "/subscriptions/00000000-0000-0000-0000-000000000002/resourceGroups/rg-sec/providers/Microsoft.Network/virtualNetworks/vnet-hub/subnets/s1",
+                    "name": "s"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

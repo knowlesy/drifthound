@@ -1,0 +1,13 @@
+{
+  "count": 2,
+  "data": [
+    {
+      "subscriptionId": "00000000-0000-0000-0000-000000000001"
+    },
+    {
+      "subscriptionId": "00000000-0000-0000-0000-000000000002"
+    }
+  ],
+  "skip_token": null,
+  "total_records": 2
+}
