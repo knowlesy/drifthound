@@ -83,6 +83,17 @@ class DashboardEnvironmentRollupTest < ActionDispatch::IntegrationTest
     assert_select "#{group('production')}[data-search*=?]", "prod"
   end
 
+  test "groups that share a display name show their key to tell them apart" do
+    @network.environments.create!(name: "Staging", key: "stage-a")
+    @network.environments.create!(name: "Staging", key: "stage-b")
+
+    get root_path
+
+    assert_select "#{group('stage-a')} .env-names", "stage-a"
+    assert_select "#{group('stage-b')} .env-names", "stage-b"
+    assert_select "#{group('dev')} .env-names", 0
+  end
+
   test "links go to the environment overview and each layer's environment page" do
     get root_path
 

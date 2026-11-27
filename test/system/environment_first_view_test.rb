@@ -106,13 +106,13 @@ class EnvironmentFirstViewTest < ApplicationSystemTestCase
       resize_to(width)
       visit root_path
       assert_selector ".projects-table"
-      assert page.evaluate_script("document.documentElement.scrollWidth <= window.innerWidth"), "project-first overflows at #{width}px"
+      assert page.evaluate_script("document.documentElement.scrollWidth <= document.documentElement.clientWidth"), "project-first overflows at #{width}px"
 
       find("[data-group='environment']").click
       assert_selector ".environment-rollup-table"
       find(".env-group[data-environment-key='layer-prod'] .expand-btn").click
       assert_selector ".env-layer-row", count: 2
-      assert page.evaluate_script("document.documentElement.scrollWidth <= window.innerWidth"), "env-first overflows at #{width}px"
+      assert page.evaluate_script("document.documentElement.scrollWidth <= document.documentElement.clientWidth"), "env-first overflows at #{width}px"
 
       page.execute_script("localStorage.removeItem('dashboardGrouping')")
     end

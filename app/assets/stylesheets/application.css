@@ -481,7 +481,15 @@
   box-sizing: border-box;
 }
 
+/* The full-width .detail-header::before is 100vw wide, which includes the scrollbar.
+   Clip it at the body so it cannot create horizontal scroll. html keeps its own
+   overflow so the body value is not propagated to the viewport. */
+html {
+  overflow: auto;
+}
+
 body {
+  overflow-x: clip;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   background-color: var(--color-bg);
   color: var(--color-text);

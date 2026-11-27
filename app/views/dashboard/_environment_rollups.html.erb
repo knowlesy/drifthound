@@ -4,6 +4,7 @@
   Local variables:
   - rollups: array of EnvironmentRollup
 %>
+<% display_name_counts = rollups.map(&:display_name).tally %>
 <div class="environment-rollup-table" id="environments-table" data-dashboard-filter-target="environmentTable" hidden>
   <div class="project-envs-header">
     <span>Environment</span>
@@ -23,8 +24,10 @@
             <span class="expand-icon">▶</span>
           </button>
           <%= link_to rollup.display_name, environment_overview_path(rollup.key), class: "env-link", data: { expandable_ignore: true } %>
-          <% unless rollup.names.one? %>
+          <% if !rollup.names.one? %>
             <span class="env-names"><%= rollup.names.join(", ") %></span>
+          <% elsif display_name_counts[rollup.display_name] > 1 %>
+            <span class="env-names"><%= rollup.key %></span>
           <% end %>
         </span>
         <span class="col-layer-count hide-mobile"><%= project_label_count(rollup.layers.size) %></span>
