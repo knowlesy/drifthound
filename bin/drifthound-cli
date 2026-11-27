@@ -986,6 +986,197 @@ module DriftHoundCli
                          'this Argo CD may use label tracking, so pass --tracking-method=label (and --instance-label-key if it is customised)'
       end
     end
+
+    # Sorts every listed object into an ownership bucket; the first matching bucket wins.
+    # Only roots that nothing owns are reported: children are counted on their root.
+    class Classifier
+      BUCKETS = %i[duplicate dependent tracked listed app_namespace control_plane platform derived_storage unowned].freeze
+      MAX_OWNER_DEPTH = 10
+      Entry = Struct.new(:object, :reason, :dependents)
+      Result = Struct.new(:entries, :counts, :owner_not_listed, :group_mismatches)
+
+      def initialize(objects, apps:, method:, installation_id:, argo_namespaces:, include_platform_managed:)
+        @apps = apps
+        @method = method
+        @installation_id = installation_id
+        @argo_namespaces = argo_namespaces
+        @platform_managed = !include_platform_managed
+        @counts = BUCKETS.each_with_object({}) { |bucket, hash| hash[bucket] = 0 }
+        @objects = dedupe(objects)
+        @by_uid = @objects.each_with_object({}) { |object, hash| hash[object.uid] = object }
+        @dependents = Hash.new(0)
+        @owner_not_listed = 0
+        @group_mismatches = 0
+        index_namespaces
+        index_stateful_sets
+      end
+
+      def call
+        @objects.each { |object| count_dependent(object) if dependent?(object) }
+        entries = []
+        @objects.each do |object|
+          bucket, reason = bucket_of(object)
+          @counts[bucket] += 1
+          entries << Entry.new(object, reason, @dependents[object.uid]) if bucket == :unowned
+        end
+        Result.new(entries, @counts, @owner_not_listed, @group_mismatches)
+      end
+
+      private
+
+      # Some objects are served under two groups (events and events.events.k8s.io); the first one wins
+      def dedupe(objects)
+        seen = Set.new
+        objects.select do |object|
+          fresh = seen.add?(object.uid)
+          @counts[:duplicate] += 1 unless fresh
+          fresh
+        end
+      end
+
+      def dependent?(object)
+        !object.owner_uids.empty?
+      end
+
+      # Walks the first owner up to the root and counts the object there
+      def count_dependent(object)
+        current = object
+        seen = Set.new([ object.uid ])
+        MAX_OWNER_DEPTH.times do
+          parent = @by_uid[current.owner_uids.first]
+          if parent.nil?
+            @owner_not_listed += 1
+            return
+          end
+          return @dependents[parent.uid] += 1 unless dependent?(parent)
+          return unless seen.add?(parent.uid)
+
+          current = parent
+        end
+      end
+
+      def index_namespaces
+        @platform_namespaces = Set.new
+        @objects.each do |object|
+          next unless object.kind == 'Namespace' && object.group.empty?
+
+          @platform_namespaces << object.name if object.aks_managedby == 'aks' || !object.addon_mode.empty?
+        end
+      end
+
+      # PVCs of a StatefulSet are named <template>-<statefulset>-<ordinal> and carry no ownerReferences
+      def index_stateful_sets
+        @pvc_prefixes = Hash.new { |hash, key| hash[key] = [] }
+        @objects.each do |object|
+          next unless object.kind == 'StatefulSet' && object.group == 'apps'
+
+          object.vct_names.split.each { |template| @pvc_prefixes[object.namespace] << "#{template}-#{object.name}-" }
+        end
+      end
+
+      def bucket_of(object)
+        return [ :dependent, nil ] if dependent?(object)
+
+        verdict = Tracking.owner(object, apps: @apps, method: @method, installation_id: @installation_id)
+        if verdict.owned?
+          @group_mismatches += 1 if verdict.group_mismatch
+          return [ :tracked, nil ]
+        end
+        return [ :listed, nil ] if @apps.lists?(object)
+        return [ :app_namespace, nil ] if namespace_object?(object) && @apps.destination_namespace?(object.name)
+        return [ :control_plane, nil ] if control_plane?(object)
+        return [ :platform, nil ] if @platform_managed && platform?(object)
+        return [ :derived_storage, nil ] if derived_storage?(object)
+
+        [ :unowned, verdict.reason ]
+      end
+
+      def namespace_object?(object)
+        object.kind == 'Namespace' && object.group.empty?
+      end
+
+      # Argo CD's own install is skipped, but Applications and projects are still reported
+      def control_plane?(object)
+        return false if object.group == 'argoproj.io'
+
+        @argo_namespaces.include?(object.namespace) || (namespace_object?(object) && @argo_namespaces.include?(object.name))
+      end
+
+      def platform?(object)
+        object.aks_managedby == 'aks' ||
+          !object.addon_mode.empty? ||
+          object.bootstrapping == 'rbac-defaults' ||
+          object.helm_release.start_with?('aks-managed') ||
+          @platform_namespaces.include?(object.namespace)
+      end
+
+      def derived_storage?(object)
+        return false unless object.group.empty?
+
+        case object.kind
+        when 'PersistentVolume'
+          !object.provisioned_by.empty? && !object.claim_name.empty?
+        when 'PersistentVolumeClaim'
+          @pvc_prefixes[object.namespace].any? { |prefix| object.name.start_with?(prefix) && object.name[prefix.size..-1] =~ /\A\d+\z/ }
+        else
+          false
+        end
+      end
+    end
+
+    # Turns a classified object into the API's item
+    module Items
+      METADATA_LIMIT_BYTES = 1800
+      IDENTIFIER_LIMIT = 1024
+      FIELD_LIMITS = { resource_type: 255, name: 255, scope: 255, location: 128 }.freeze
+
+      def self.identifier(object)
+        "#{object.group.empty? ? 'core' : object.group}/#{object.kind}/#{object.namespace.empty? ? '_cluster' : object.namespace}/#{object.name}"
+      end
+
+      def self.resource_type(object)
+        object.group.empty? ? object.kind : "#{object.kind}.#{object.group}"
+      end
+
+      def self.clean(value)
+        value.to_s.delete("\u0000")
+      end
+
+      def self.to_item(entry, cluster, instance_label_key)
+        object = entry.object
+        identifier = clean(identifier(object))
+        return nil if identifier.length > IDENTIFIER_LIMIT
+
+        {
+          identifier: identifier,
+          resource_type: clean(resource_type(object))[0, FIELD_LIMITS[:resource_type]],
+          name: clean(object.name)[0, FIELD_LIMITS[:name]],
+          scope: object.namespace.empty? ? nil : clean(object.namespace)[0, FIELD_LIMITS[:scope]],
+          location: clean(cluster)[0, FIELD_LIMITS[:location]],
+          metadata: metadata(entry, instance_label_key)
+        }
+      end
+
+      def self.metadata(entry, instance_label_key)
+        object = entry.object
+        labels = { instance_label_key => object.instance_label, 'app.kubernetes.io/name' => object.app_name,
+                   'app.kubernetes.io/part-of' => object.part_of }.reject { |_key, value| value.empty? }
+        data = {
+          api_version: object.api_version, uid: object.uid, created_at: object.created_at, reason: entry.reason,
+          tracking_id: object.tracking_id, managed_by: object.managed_by, helm_release: object.helm_release,
+          helm_release_namespace: object.helm_release_ns, helm_chart: object.helm_chart,
+          dependents: entry.dependents.positive? ? entry.dependents : nil, secret_type: object.secret_type,
+          labels: labels.empty? ? nil : labels
+        }
+        data = data.reject { |_key, value| value.nil? || value == '' }
+        data = data.transform_values { |value| value.is_a?(String) ? clean(value) : value }
+        return data if data.to_json.bytesize <= METADATA_LIMIT_BYTES
+
+        data = data.reject { |key, _| key == :labels }
+        data = data.reject { |key, _| key == :tracking_id } if data.to_json.bytesize > METADATA_LIMIT_BYTES
+        data.merge(truncated: true)
+      end
+    end
   end
 
   module Modes
@@ -994,6 +1185,7 @@ module DriftHoundCli
       LABEL_KEY_FORMAT = %r{\A([A-Za-z0-9.-]+/)?[A-Za-z0-9_.-]{1,63}\z}.freeze
       DEFAULT_DESTINATIONS = %w[https://kubernetes.default.svc in-cluster].freeze
       CLUSTER_NAME_LIMIT = 128
+      MAX_LISTED = 200
 
       def self.add_options(parser, opts)
         parser.on('--context=NAME', 'kubectl context of the cluster to scan (argocd tool)') { |v| opts[:kube_context] = v }
@@ -1110,7 +1302,54 @@ module DriftHoundCli
         apps = applications
         result = inventory.collect
         Argo::Tracking.check_method!(result.objects, apps, @tracking_method)
-        raise ArgoError, "ownership analysis is not implemented yet (#{cluster}, #{apps.in_scope_count} Applications)"
+        classified = Argo::Classifier.new(result.objects, apps: apps, method: @tracking_method, installation_id: @opts[:argo_installation_id],
+                                                          argo_namespaces: @argo_namespaces,
+                                                          include_platform_managed: @opts[:include_platform_managed] ? true : false).call
+        skipped_long = 0
+        unowned = classified.entries.each_with_object([]) do |entry, list|
+          item = Argo::Items.to_item(entry, cluster, @instance_label_key)
+          item ? list << item : skipped_long += 1
+        end
+        unowned.sort_by! { |item| item[:identifier].downcase }
+        items, dropped = Unmanaged.truncate(unowned, max: MAX_UNMANAGED_RESOURCES)
+
+        [ items, summary(cluster, apps, result, classified, unowned.size, items, dropped, skipped_long) ]
+      end
+
+      def summary(cluster, apps, result, classified, unowned_total, items, dropped, skipped_long)
+        counts = classified.counts
+        lines = []
+        lines << "Cluster: #{cluster}"
+        lines << "Tracking method: #{@tracking_method}; Applications in scope: #{apps.in_scope_count}"
+        lines << "Kinds listed: #{result.listed}; skipped by default: #{result.denied}; excluded with --exclude-kind: #{result.excluded}"
+        lines << "Kinds removed since discovery: #{result.gone.join(', ')}" unless result.gone.empty?
+        result.notes.each { |note| lines << "Note: #{note}" }
+        lines << "Objects scanned: #{result.objects.size} (duplicates dropped: #{counts[:duplicate]})"
+        lines << "Owned by Argo CD: #{counts[:tracked]} tracked, #{counts[:listed]} listed by an Application, #{counts[:app_namespace]} Application namespaces"
+        lines << "Not reported: #{counts[:dependent]} owned by another object (#{classified.owner_not_listed} with an owner that is not listed), " \
+                 "#{counts[:control_plane]} in the Argo CD control plane, #{counts[:platform]} platform managed, #{counts[:derived_storage]} derived storage"
+        lines << "Tracking group mismatches tolerated: #{classified.group_mismatches}" if classified.group_mismatches.positive?
+        lines << "Skipped (identifier longer than #{Argo::Items::IDENTIFIER_LIMIT} characters): #{skipped_long}" if skipped_long.positive?
+        lines << "Unowned objects: #{unowned_total}"
+        helm = helm_releases(items)
+        lines << "Helm releases without Argo CD: #{helm}" unless helm.empty?
+        lines << "Only the first #{MAX_UNMANAGED_RESOURCES} are reported; #{dropped} more were dropped." if dropped.positive?
+        listed = items.first(MAX_LISTED)
+        unless listed.empty?
+          lines << ''
+          listed.each { |item| lines << item[:identifier] }
+          lines << "... and #{items.size - listed.size} more" if items.size > listed.size
+        end
+        lines.join("\n")
+      end
+
+      def helm_releases(items)
+        counts = Hash.new(0)
+        items.each do |item|
+          release = item[:metadata][:helm_release]
+          counts[release] += 1 if release
+        end
+        counts.sort.map { |release, count| "#{release} (#{count})" }.join(', ')
       end
     end
   end
