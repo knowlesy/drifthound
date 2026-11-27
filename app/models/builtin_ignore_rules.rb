@@ -29,13 +29,15 @@ class BuiltinIgnoreRules
   end
   private_class_method :argo_namespace_rules
 
-  # Names from the upstream Argo CD install manifests (cluster install). Unverified: written from memory, not checked against a release.
+  # ClusterRole and ClusterRoleBinding names from Argo CD's stable manifests/install.yaml (cluster install).
   ARGOCD_CLUSTER_RBAC = %w[argocd-application-controller argocd-applicationset-controller argocd-server].freeze
 
-  # Exact names of the StorageClasses AKS creates. Unverified: written from memory, not checked against a cluster.
+  # StorageClasses AKS creates, per https://learn.microsoft.com/azure/aks/concepts-storage
+  # (azureblob-* only exist when the Blob CSI driver is enabled). The second row holds the legacy
+  # in-tree names older clusters still carry; they are no longer on that page.
   AKS_STORAGE_CLASSES = %w[
-    default managed managed-csi managed-csi-premium managed-premium
-    azurefile azurefile-csi azurefile-csi-premium azurefile-premium
+    default managed-csi managed-csi-premium azurefile-csi azurefile-csi-premium azureblob-nfs-premium azureblob-fuse-premium
+    managed managed-premium azurefile azurefile-premium
   ].freeze
 
   REGISTRY = {
