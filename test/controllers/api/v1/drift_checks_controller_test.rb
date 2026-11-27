@@ -1,6 +1,8 @@
 require "test_helper"
 
 class Api::V1::DriftChecksControllerTest < ActionDispatch::IntegrationTest
+  include ActiveJob::TestHelper
+
   setup do
     @api_token = ApiToken.create!(name: "test-token")
     @auth_header = { "Authorization" => "Bearer #{@api_token.token}" }
@@ -727,5 +729,180 @@ class Api::V1::DriftChecksControllerTest < ActionDispatch::IntegrationTest
       assert_response :unprocessable_entity
       assert_equal({ "error" => "branch is not a valid git branch name" }, response.parsed_body)
     end
+  end
+
+  # --- source and unmanaged resources ---
+
+  SUB_ID = "/subscriptions/00000000-0000-0000-0000-000000000000"
+
+  def post_check(project, env, params)
+    post api_v1_environment_checks_path(project, env), params: params, headers: @auth_header, as: :json
+  end
+
+  def unmanaged_item(identifier = "#{SUB_ID}/resourceGroups/app/providers/Microsoft.Storage/storageAccounts/sa1", **extra)
+    { identifier: identifier }.merge(extra)
+  end
+
+  test "legacy payload gets terraform source and nil unmanaged counts" do
+    post_check("legacy", "production", { status: "ok" })
+
+    assert_response :created
+    body = response.parsed_body
+    assert_equal "terraform", body["source"]
+    assert_nil body["unmanaged_count"]
+    assert_nil body["unmanaged_ignored_count"]
+    check = DriftCheck.find(body["id"])
+    assert check.source_terraform?
+    assert_not check.reports_inventory?
+  end
+
+  test "azure check without status defaults to ok" do
+    post_check("az", "prod-azure", { source: "azure", unmanaged_resources: [] })
+
+    assert_response :created
+    body = response.parsed_body
+    assert_equal "ok", body["status"]
+    assert_equal "azure", body["source"]
+    assert_equal 0, body["unmanaged_count"]
+    assert_equal 0, body["unmanaged_ignored_count"]
+  end
+
+  test "azure check with unmanaged resources becomes drift and stores rows" do
+    assert_difference -> { UnmanagedResource.count }, 1 do
+      post_check("az", "prod-azure", {
+        source: "azure",
+        status: "ok",
+        unmanaged_resources: [ unmanaged_item(resource_type: "microsoft.storage/storageaccounts", name: "sa1", scope: "app", location: "westeurope", metadata: { tags: { owner: "x" } }) ]
+      })
+    end
+
+    assert_response :created
+    assert_equal "drift", response.parsed_body["status"]
+    assert_equal 1, response.parsed_body["unmanaged_count"]
+    check = DriftCheck.find(response.parsed_body["id"])
+    assert check.drift?
+    row = check.unmanaged_resources.first
+    assert_equal "sa1", row.name
+    assert_equal "app", row.scope
+    assert_equal({ "tags" => { "owner" => "x" } }, row.metadata)
+    assert_not row.ignored
+    assert Environment.find(check.environment_id).drift?
+  end
+
+  test "built-in rules mark rows ignored and keep the check ok" do
+    post_check("az", "prod-azure", {
+      source: "azure",
+      unmanaged_resources: [ unmanaged_item("#{SUB_ID}/resourceGroups/MC_rg_aks_westeurope/providers/Microsoft.Network/loadBalancers/kubernetes") ]
+    })
+
+    assert_response :created
+    assert_equal "ok", response.parsed_body["status"]
+    assert_equal 0, response.parsed_body["unmanaged_count"]
+    assert_equal 1, response.parsed_body["unmanaged_ignored_count"]
+    row = UnmanagedResource.last
+    assert row.ignored
+    assert_equal "Built-in: AKS node resource group", row.ignore_reason
+  end
+
+  test "environment rules apply to new checks" do
+    project = Project.create!(name: "Az", key: "az")
+    environment = project.environments.create!(name: "Prod", key: "prod-azure")
+    environment.unmanaged_ignore_rules.create!(pattern: "*/storageAccounts/sa1")
+
+    post_check("az", "prod-azure", { source: "azure", unmanaged_resources: [ unmanaged_item ] })
+
+    assert_equal "ok", response.parsed_body["status"]
+    assert_equal 1, response.parsed_body["unmanaged_ignored_count"]
+  end
+
+  test "error status wins over unmanaged resources" do
+    post_check("az", "prod-azure", { source: "azure", status: "error", raw_output: "boom", unmanaged_resources: [ unmanaged_item ] })
+
+    assert_response :created
+    assert_equal "error", response.parsed_body["status"]
+  end
+
+  test "terraform check can also report unmanaged resources" do
+    post_check("tf", "production", { status: "ok", unmanaged_resources: [ unmanaged_item ] })
+
+    assert_response :created
+    assert_equal "terraform", response.parsed_body["source"]
+    assert_equal "drift", response.parsed_body["status"]
+  end
+
+  test "terraform check without status is still rejected" do
+    assert_no_difference -> { DriftCheck.count } do
+      post_check("tf", "production", { add_count: 1 })
+    end
+    assert_response :unprocessable_entity
+  end
+
+  test "invalid source returns 422 and creates nothing" do
+    [ "bogus", "", 5, [ "azure" ] ].each do |value|
+      assert_no_difference [ -> { Project.count }, -> { Environment.count }, -> { DriftCheck.count } ] do
+        post_check("bad-source", "production", { status: "ok", source: value })
+      end
+      assert_response :unprocessable_entity, "source #{value.inspect}"
+    end
+  end
+
+  test "invalid status returns 422 and creates nothing" do
+    assert_no_difference [ -> { Project.count }, -> { Environment.count }, -> { DriftCheck.count } ] do
+      post_check("bad-status", "production", { status: "bogus" })
+    end
+    assert_response :unprocessable_entity
+  end
+
+  test "invalid unmanaged_resources return 422 and create nothing" do
+    bad_payloads = [
+      "nope",
+      { "0" => { identifier: "/a" } },
+      [ { name: "no identifier" } ],
+      [ unmanaged_item("/a\u0000b") ],
+      [ unmanaged_item(metadata: { tags: { k: "v\u0000" } }) ],
+      Array.new(5001) { |i| unmanaged_item("/a/#{i}") }
+    ]
+    bad_payloads.each_with_index do |payload, i|
+      assert_no_difference [ -> { Project.count }, -> { Environment.count }, -> { DriftCheck.count }, -> { UnmanagedResource.count } ] do
+        post_check("bad-items", "production", { source: "azure", unmanaged_resources: payload })
+      end
+      assert_response :unprocessable_entity, "payload #{i}"
+      assert response.parsed_body["error"].present?
+    end
+  end
+
+  test "unmanaged_resources null is treated as no inventory" do
+    post_check("az", "prod-azure", { source: "azure", unmanaged_resources: nil })
+
+    assert_response :created
+    assert_nil response.parsed_body["unmanaged_count"]
+  end
+
+  test "environment status and notification follow the final status" do
+    assert_enqueued_with(job: NotificationJob) do
+      post_check("az", "prod-azure", { source: "azure", unmanaged_resources: [ unmanaged_item ] })
+    end
+
+    assert_response :created
+    environment = Project.find_by(key: "az").environments.find_by(key: "prod-azure")
+    assert environment.drift?
+  end
+
+  test "ignored-only inventory leaves the environment ok" do
+    post_check("az", "prod-azure", { source: "azure", unmanaged_resources: [] })
+    assert_no_enqueued_jobs only: NotificationJob do
+      post_check("az", "prod-azure", {
+        source: "azure",
+        unmanaged_resources: [ unmanaged_item("#{SUB_ID}/resourceGroups/NetworkWatcherRG") ]
+      })
+    end
+    assert Project.find_by(key: "az").environments.find_by(key: "prod-azure").ok?
+  end
+
+  test "duplicate identifiers are stored once" do
+    post_check("az", "prod-azure", { source: "azure", unmanaged_resources: [ unmanaged_item("/A"), unmanaged_item("/a") ] })
+
+    assert_equal 1, response.parsed_body["unmanaged_count"]
+    assert_equal 1, DriftCheck.find(response.parsed_body["id"]).unmanaged_resources.count
   end
 end

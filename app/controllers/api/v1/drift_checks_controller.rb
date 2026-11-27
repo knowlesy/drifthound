@@ -22,6 +22,22 @@ module Api
                         status: :unprocessable_entity
         end
 
+        source = params[:source].nil? ? "terraform" : params[:source]
+        unless source.is_a?(String) && DriftCheck.sources.key?(source)
+          return render json: { error: "source must be one of: #{DriftCheck.sources.keys.join(', ')}" },
+                        status: :unprocessable_entity
+        end
+
+        # Everything that can fail validation runs before anything is written, so a
+        # rejected submission never creates a project or environment.
+        existing_environment = Project.find_by(key: params[:project_key])&.environments&.find_by(key: params[:environment_key])
+        ingest = UnmanagedResourceIngest.new(
+          environment: existing_environment || Environment.new,
+          source: source,
+          items: request.request_parameters["unmanaged_resources"]
+        ).call
+        status = DriftCheck.resolve_status(reported: params[:status], source: source, unmanaged_count: ingest.unmanaged_count)
+
         project = Project.find_or_create_by_key(params[:project_key])
         environment = Environment.find_or_create_by_key(project, params[:environment_key], name: environment_name)
 
@@ -45,13 +61,29 @@ module Api
           update_notification_channel(environment)
         end
 
-        drift_check = environment.drift_checks.create!(drift_check_params)
+        drift_check = DriftCheck.transaction do
+          check = environment.drift_checks.create!(
+            drift_check_params.merge(
+              source: source,
+              status: status,
+              unmanaged_count: ingest.unmanaged_count,
+              unmanaged_ignored_count: ingest.ignored_count
+            )
+          )
+          if ingest.rows.any?
+            UnmanagedResource.insert_all!(ingest.rows.map { |row| row.merge(drift_check_id: check.id) })
+          end
+          check
+        end
 
         render json: {
           id: drift_check.id,
           project_key: project.key,
           environment_key: environment.key,
           status: drift_check.status,
+          source: drift_check.source,
+          unmanaged_count: drift_check.unmanaged_count,
+          unmanaged_ignored_count: drift_check.unmanaged_ignored_count,
           branch: drift_check.branch,
           created_at: drift_check.created_at
         }, status: :created
