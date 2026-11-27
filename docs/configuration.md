@@ -103,7 +103,7 @@ PUBLIC_MODE=true
 
 **Notes:**
 - **Private by default** - New deployments require authentication out of the box
-- Admin actions (delete projects/environments, user management, API tokens) always require authentication regardless of this setting
+- Admin actions (delete projects/environments/checks, exclude environments from metrics, user management, API tokens) always require authentication regardless of this setting
 - Use public mode for internal dashboards where authentication would add friction
 - Use private mode for sensitive infrastructure data or external-facing deployments
 
@@ -111,6 +111,34 @@ PUBLIC_MODE=true
 
 - **Private mode (recommended)**: Production deployments, sensitive infrastructure data, compliance requirements
 - **Public mode**: Internal team dashboards, demo instances, open-source project monitoring
+
+### PLAN_OUTPUT_MIN_ROLE
+
+Minimum role required to see the raw Terraform plan output on an environment page. Plan output can include resource attributes and values that you may not want every viewer to read.
+
+**Required:** No
+**Default:** `viewer` (everyone who can open the environment page sees plan output, the same as before this setting existed)
+**Options:** `viewer`, `editor`, `admin`
+
+```bash
+# Only editors and admins can expand plan output in the web UI
+PLAN_OUTPUT_MIN_ROLE=editor
+```
+
+**Behavior:**
+
+| `PLAN_OUTPUT_MIN_ROLE` | Anonymous (public mode) | Viewer | Editor | Admin |
+|------------------------|-------------------------|--------|--------|-------|
+| `viewer` (default) | ✅ Plan output | ✅ Plan output | ✅ Plan output | ✅ Plan output |
+| `editor` | 🔒 Restricted | 🔒 Restricted | ✅ Plan output | ✅ Plan output |
+| `admin` | 🔒 Restricted | 🔒 Restricted | 🔒 Restricted | ✅ Plan output |
+
+**Notes:**
+- Users below the minimum role still see the environment's status, check history, change counts and durations; each check shows "Plan output restricted" in place of the Plan button, and the output is not sent to the browser.
+- Anonymous visitors in public mode count as below `viewer`: they see plan output only when the minimum role is `viewer`.
+- The value is case-insensitive. Any other value stops the application at boot with an error.
+- This setting applies to the web UI only. The token-authenticated API endpoint `GET /api/v1/projects/:project_key/environments/:key/drift` still returns `raw_output` to API tokens with plan access (`write` tokens, and `read_plans` tokens once #143 merges).
+- The role this setting compares against can come from any login method, including a GitHub team mapping, not only the built-in password roles. For example, with `PLAN_OUTPUT_MIN_ROLE=editor`, viewers see status and dashboards but not raw plan output.
 
 ## Admin Authentication
 
@@ -167,6 +195,16 @@ ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD=secure_password rails db:migrate
 When logged in as admin, you can:
 - Delete projects (cascades to all environments and drift checks)
 - Delete environments (cascades to all drift checks)
+- Delete a single drift check, or clear an environment's checks from before a date, from the environment page. The environment's status and last check time move to the newest remaining check, and no notification is sent.
+- Exclude environments from dashboard metrics (see below)
+
+### Excluding Environments From Dashboard Metrics
+
+Test or short-lived environments can skew the dashboard charts. An admin can exclude an environment with the **Exclude from Metrics** button on its page, and include it again with **Include in Metrics**. `write` API tokens can set the same flag; see [API Usage](api-usage.md#update-an-environment).
+
+- An excluded environment is left out of every dashboard chart and the stability score.
+- It stays in every list: the dashboard table and status counts, the project page, its own page and the API, with its drift shown as normal.
+- New checks are still recorded, and notifications are not affected.
 
 Read-only operations (viewing dashboard, projects, environments, drift history) do not require authentication.
 
@@ -265,6 +303,85 @@ GITHUB_ORG=my-company
 GITHUB_TEAM_ADMIN=infrastructure-admins,security-team
 GITHUB_TEAM_EDITOR=infrastructure-team,platform-engineers,sre
 GITHUB_TEAM_VIEWER=developers,contractors
+```
+
+## OpenID Connect (OIDC) Authentication
+
+DriftHound can sign users in with any OpenID Connect identity provider (for example Keycloak, Authentik, Okta or Google Workspace). It is optional, off by default, and works next to password login and GitHub OAuth. One provider is supported per instance.
+
+OIDC login uses [OmniAuth](https://github.com/omniauth/omniauth) with [omniauth_openid_connect](https://github.com/omniauth/omniauth_openid_connect): the authorization code flow with PKCE, `state` and `nonce`, provider discovery from `<issuer>/.well-known/openid-configuration`, and ID token validation (signature, issuer, audience and expiry) are handled by those gems.
+
+### Enabling OIDC
+
+```bash
+OIDC_ENABLED=true
+OIDC_ISSUER=https://login.example.com
+OIDC_CLIENT_ID=drifthound
+OIDC_CLIENT_SECRET=your-client-secret
+OIDC_VIEWER_GROUPS=drift-viewers
+```
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `OIDC_ENABLED` | No | `false` | Set to `true` to show the SSO button and enable `/auth/oidc` |
+| `OIDC_ISSUER` | When enabled | | Issuer URL of the provider, used for discovery |
+| `OIDC_CLIENT_ID` | When enabled | | Client ID registered with the provider |
+| `OIDC_CLIENT_SECRET` | When enabled | | Client secret registered with the provider |
+| `OIDC_SCOPES` | No | `openid email profile` | Space- or comma-separated scopes; `openid` is always added |
+| `OIDC_GROUPS_CLAIM` | No | `groups` | Claim in the ID token or userinfo response that holds the user's groups |
+| `OIDC_ADMIN_GROUPS` | See below | | Comma-separated group values that grant the admin role |
+| `OIDC_EDITOR_GROUPS` | See below | | Comma-separated group values that grant the editor role |
+| `OIDC_VIEWER_GROUPS` | See below | | Comma-separated group values that grant the viewer role |
+| `OIDC_DEFAULT_ROLE` | See below | | `viewer`, `editor` or `admin`, given to users in no mapped group. Unset means those users are refused |
+| `OIDC_BUTTON_LABEL` | No | `Sign in with SSO` | Text of the login button |
+
+When `OIDC_ENABLED=true`, the app refuses to boot if the issuer, client ID or client secret is missing, if `OIDC_DEFAULT_ROLE` is not a valid role, or if no group mapping and no default role is set.
+
+### Registering DriftHound with your provider
+
+Create a confidential web client with:
+
+- **Redirect URI**: `APP_URL` followed by `/auth/oidc/callback`, for example `https://drifthound.example.com/auth/oidc/callback`. Set [`APP_URL`](#app_url) to the public URL of DriftHound.
+- **Grant type**: authorization code
+- **Claims**: `email`, and the groups claim named in `OIDC_GROUPS_CLAIM`
+
+### Group-to-Role Mapping
+
+```bash
+OIDC_GROUPS_CLAIM=groups
+OIDC_ADMIN_GROUPS=drift-admins
+OIDC_EDITOR_GROUPS=drift-editors,release-managers
+OIDC_VIEWER_GROUPS=drift-viewers
+```
+
+**Notes:**
+- Group values are compared exactly as the provider sends them (case-sensitive). Some providers send group IDs instead of names; use whatever value appears in the claim.
+- The role is set from the groups on every login, and the highest mapped role wins.
+- Users in no mapped group are refused, unless `OIDC_DEFAULT_ROLE` is set.
+- Some providers leave the groups claim out when a user is in many groups. Those users will match no group.
+
+### How OIDC Users Are Matched
+
+- Users are matched only on provider (`oidc`) and the `sub` claim. There is no linking by email.
+- On first login a new user is created with the `email` claim (lowercased) and the mapped role.
+- If that email already belongs to another DriftHound account (a password user, a GitHub user, or another OIDC subject), the login is refused with a message. Compare is case-insensitive. An admin can delete the old account if the person should sign in with OIDC instead.
+- Logins without an `email` claim, or with `email_verified` set to `false`, are refused.
+- The stored email is not changed on later logins.
+
+### Example Configuration
+
+```bash
+APP_URL=https://drifthound.example.com
+OIDC_ENABLED=true
+OIDC_ISSUER=https://login.example.com
+OIDC_CLIENT_ID=drifthound
+OIDC_CLIENT_SECRET=your-client-secret
+OIDC_SCOPES="openid email profile groups"
+OIDC_GROUPS_CLAIM=groups
+OIDC_ADMIN_GROUPS=drift-admins
+OIDC_EDITOR_GROUPS=drift-editors
+OIDC_VIEWER_GROUPS=drift-viewers
+OIDC_BUTTON_LABEL="Sign in with Example SSO"
 ```
 
 ## Database Configuration
@@ -547,6 +664,7 @@ SECRET_KEY_BASE=340b6113695da1baed5d5b7945bff4dc4ab86b75f602c5183624c1b87ffc17d1
 
 # Access Control (private by default)
 PUBLIC_MODE=false
+PLAN_OUTPUT_MIN_ROLE=viewer
 
 # Admin Authentication (required in production)
 ADMIN_EMAIL=admin@example.com
@@ -561,6 +679,14 @@ GITHUB_ORG=your-organization
 GITHUB_TEAM_ADMIN=platform-admins,security-team
 GITHUB_TEAM_EDITOR=platform-editors,developers
 GITHUB_TEAM_VIEWER=read-only
+
+# OpenID Connect (optional)
+OIDC_ENABLED=true
+OIDC_ISSUER=https://login.example.com
+OIDC_CLIENT_ID=drifthound
+OIDC_CLIENT_SECRET=your-oidc-client-secret
+OIDC_ADMIN_GROUPS=drift-admins
+OIDC_VIEWER_GROUPS=drift-viewers
 
 # Database
 DRIFTHOUND_DATABASE_PASSWORD=your-secure-db-password

@@ -1,5 +1,5 @@
 import { Controller } from "@hotwired/stimulus"
-import Chart from "chart.js/auto"
+import Chart from "charts"
 
 export default class extends Controller {
   static targets = ["canvas"]
@@ -125,9 +125,6 @@ export default class extends Controller {
               callback: function(value) {
                 return value + '%';
               }
-            },
-            grid: {
-              color: "rgba(0, 0, 0, 0.05)"
             }
           }
         }

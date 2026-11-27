@@ -59,9 +59,10 @@ curl -X POST \
 | `destroy_count` | integer | No | Number of resources to destroy |
 | `duration` | float | No | Execution duration in seconds |
 | `raw_output` | text | No | Full Terraform plan output |
+| `environment_name` | string | No | Display name for the environment. Defaults to the titleized `environment_key` when the environment is created. When provided, it is applied on every call, so it also renames an existing environment. When omitted, the current name is kept. Must be a string; surrounding whitespace is removed. At most 255 characters; a longer or non-string value is rejected with `422 Unprocessable Entity` and nothing is created or renamed. The last name sent wins, so if several pipelines report the same environment, send the same name from all of them. |
 | `directory` | string | No | Directory where Terraform is executed. Only set on first call; subsequent calls won't overwrite. Update via GUI. |
 | `repository` | string | No | Repository URL (e.g., `https://github.com/org/repo`). Only set on first call; subsequent calls won't overwrite. Update via GUI. |
-| `branch` | string | No | Repository branch (default: `main`). Only set on first call if different from default; update via GUI. |
+| `branch` | string | No | Branch the check ran against. Stored on each check and shown in the environment's check history; the environment page links the repository at the latest check's branch. The first value that differs from `main` also becomes the project branch, which is used when a check has no branch. Must be a string of at most 255 characters. Names git rejects (for example ones containing `..`, spaces, `~`, `^`, `:`, `?`, `*`, `[`, `\` or `@{`, starting with `-`, `/` or `.`, or ending with `/`, `.` or `.lock`) are rejected with `422 Unprocessable Entity` and nothing is created. |
 | `notification_channel` | object | No | Optional notification channel configuration (see [Advanced Features](#advanced-features)) |
 
 ### Response
@@ -74,6 +75,7 @@ curl -X POST \
   "project_key": "my-project",
   "environment_key": "my-env",
   "status": "drift",
+  "branch": "master",
   "created_at": "2025-11-27T10:30:00Z"
 }
 ```
@@ -91,6 +93,100 @@ curl -X POST \
 | `drift` | Drift detected - changes pending |
 | `error` | Error running drift check |
 | `unknown` | Initial state or unable to determine |
+
+### List Drift Check History
+
+Read past drift checks, for example to chart drift trends in an external dashboard. Results are ordered newest first.
+
+**Endpoints:**
+
+- `GET /api/v1/projects/:project_key/environments/:environment_key/checks` - checks for one environment
+- `GET /api/v1/checks` - checks across all projects
+
+**Query Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `since` | ISO 8601 date or timestamp | No | Only checks created at or after this time (a date or a timestamp without an offset is read as UTC) |
+| `until` | ISO 8601 date or timestamp | No | Only checks created before this time (a date or a timestamp without an offset is read as UTC) |
+| `limit` | integer | No | Page size, 1 to 500 (default: 50) |
+| `cursor` | string | No | The `next_cursor` value from the previous page |
+| `project` | string | No | `GET /api/v1/checks` only: filter by project key |
+| `environment` | string | No | `GET /api/v1/checks` only: filter by environment key |
+
+**Example Request:**
+
+```bash
+curl -H "Authorization: Bearer YOUR_API_TOKEN" \
+  "http://localhost:3000/api/v1/projects/my-project/environments/my-env/checks?since=2025-11-01&limit=100"
+```
+
+**Response (200 OK):**
+
+```json
+{
+  "checks": [
+    {
+      "id": 123,
+      "project_key": "my-project",
+      "environment_key": "my-env",
+      "status": "drift",
+      "add_count": 2,
+      "change_count": 1,
+      "destroy_count": 0,
+      "duration": 8,
+      "execution_number": 42,
+      "branch": "main",
+      "created_at": "2025-11-27T10:30:00Z",
+      "change_summary": "2 to add, 1 to change"
+    }
+  ],
+  "pagination": {
+    "limit": 100,
+    "has_more": true,
+    "next_cursor": "MjAyNS0xMS0yN1QxMDozMDowMC4wMDAwMDBaLDEyMw"
+  }
+}
+```
+
+To fetch the next page, repeat the request with the same filters and `cursor` set to `next_cursor`. When `has_more` is `false`, `next_cursor` is `null`. The cursor points at a position in the list, so checks submitted while you page through do not cause duplicates or gaps.
+
+History responses do not include `raw_output`. Use `GET /api/v1/projects/:project_key/environments/:key/drift` to read the full plan output of the latest check.
+
+**Error Responses:**
+
+- `400 Bad Request` - Invalid `since`, `until`, `limit` or `cursor`, or a `project` or `environment` that is not a single key
+- `401 Unauthorized` - Missing or invalid API token
+- `404 Not Found` - Unknown project or environment
+
+### Update an Environment
+
+Exclude an environment from the dashboard charts and stability score, or include it again. Needs a `write` token.
+
+**Note:** any `write` token can set this flag through the API. The web UI only lets admins change it, so it is not admin-only over the API. Write tokens can already change the charts by submitting checks.
+
+**Endpoint:** `PATCH /api/v1/projects/:project_key/environments/:key`
+
+```bash
+curl -X PATCH \
+  http://localhost:3000/api/v1/projects/my-project/environments/staging \
+  -H "Authorization: Bearer YOUR_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"exclude_from_metrics": true}'
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `exclude_from_metrics` | boolean | Yes | `true` leaves the environment out of the dashboard charts and stability score; `false` includes it again. It stays in every list either way. |
+
+The response is the environment, as returned by `GET /api/v1/projects/:project_key/environments/:key`. Environment objects in the read API include `exclude_from_metrics`.
+
+**Error Responses:**
+
+- `401 Unauthorized` - Missing or invalid API token
+- `403 Forbidden` - The token is read-only
+- `404 Not Found` - Unknown project or environment
+- `422 Unprocessable Entity` - `exclude_from_metrics` is missing or not a boolean
 
 ## Advanced Features
 
@@ -139,20 +235,52 @@ DriftHound provides a web-based interface for managing API tokens. Only admin us
 
 1. Log in as an admin user
 2. Click **API Tokens** in the navigation bar
-3. Enter a name for your token (e.g., "CI/CD Pipeline") and click **Create Token**
+3. Enter a name for your token (e.g., "CI/CD Pipeline"), choose its access level, and click **Create Token**
 4. **Important:** Copy the token immediately - it will only be shown once!
 
 The API Tokens page also displays:
 - A list of all existing tokens with partial token previews
+- The access level of each token
 - Creation dates for each token
 - Delete buttons to revoke tokens
 - Usage examples showing how to authenticate API requests
+
+### Token Access Levels
+
+Each token has an access level:
+
+| Access | Allowed requests | Use for |
+|--------|------------------|---------|
+| `write` (default) | All API endpoints, including submitting drift checks | CI/CD pipelines and the CLI |
+| `read_plans` | `GET` and `HEAD` requests only, including plan output | Tools that need to show or analyse plans |
+| `read` | `GET` and `HEAD` requests only, without plan output | Dashboards and reporting tools that only read drift status |
+
+A `read` or `read_plans` token that sends any other request (for example `POST .../checks`) receives `403 Forbidden`:
+
+```json
+{ "error": "Forbidden: this API token is read-only" }
+```
+
+Plan output can contain sensitive values, so only `read_plans` and `write` tokens receive it. For a `read` token, `GET .../environments/:key/drift` still returns the check summary, without `raw_output` and with `"raw_output_restricted": true`.
+
+Tokens created before access levels were introduced keep `write` access.
+
+### Using the Rake Tasks
+
+```bash
+bin/rails "api_tokens:generate[CI Pipeline]"
+bin/rails "api_tokens:generate[Reporting Dashboard,read]"
+bin/rails "api_tokens:generate[Plan Viewer,read_plans]"
+bin/rails api_tokens:list
+bin/rails "api_tokens:revoke[42]"
+```
 
 ### Token Security
 
 - Tokens are only displayed once at creation time
 - Store tokens securely (e.g., in CI/CD secrets, environment variables)
 - Use descriptive names to identify token purposes
+- Give tools that only read data a `read` token
 - Revoke tokens that are no longer needed
 
 ## Health Check Endpoint

@@ -1,11 +1,11 @@
 source "https://rubygems.org"
 
 # Bundle edge Rails instead: gem "rails", github: "rails/rails", branch: "main"
-gem "rails", "~> 8.1.1"
+gem "rails", "~> 8.1.4"
 # The modern asset pipeline for Rails [https://github.com/rails/propshaft]
 gem "propshaft"
 # Use postgresql as the database for Active Record
-gem "pg", "~> 1.6"
+gem "pg", "~> 1.7"
 # Use the Puma web server [https://github.com/puma/puma]
 gem "puma", ">= 5.0"
 # Use JavaScript with ESM import maps [https://github.com/rails/importmap-rails]
@@ -18,7 +18,7 @@ gem "stimulus-rails"
 gem "jbuilder"
 
 # Use Active Model has_secure_password [https://guides.rubyonrails.org/active_model_basics.html#securepassword]
-gem "bcrypt", "~> 3.1.7"
+gem "bcrypt", "~> 3.1.22"
 
 # Authorization [https://github.com/varvet/pundit]
 gem "pundit", "~> 2.4"
@@ -44,7 +44,11 @@ gem "thruster", require: false
 # gem "image_processing", "~> 1.2"
 
 # Slack API client [https://github.com/slack-ruby/slack-ruby-client]
-gem "slack-ruby-client", "~> 3.1"
+gem "slack-ruby-client", "~> 3.3"
+
+gem "omniauth", "~> 2.1"
+gem "omniauth_openid_connect", "~> 0.8"
+gem "omniauth-rails_csrf_protection", "~> 2.0"
 
 group :development, :test do
   # See https://guides.rubyonrails.org/debugging_rails_applications.html#debugging-with-the-debug-gem
@@ -69,5 +73,5 @@ group :test do
   # Mocking and stubbing [https://github.com/freerange/mocha]
   gem "mocha"
   # Pin minitest to 5.x — minitest 6 changed the run method signature incompatibly with Rails 8.1
-  gem "minitest", "~> 5.25"
+  gem "minitest", "~> 6.0"
 end

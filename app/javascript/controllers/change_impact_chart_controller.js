@@ -1,5 +1,5 @@
 import { Controller } from "@hotwired/stimulus"
-import Chart from "chart.js/auto"
+import Chart from "charts"
 
 export default class extends Controller {
   static targets = ["canvas"]
@@ -105,9 +105,6 @@ export default class extends Controller {
             ticks: {
               stepSize: 1,
               precision: 0
-            },
-            grid: {
-              color: "rgba(0, 0, 0, 0.05)"
             }
           }
         }

@@ -68,11 +68,12 @@ docker run --rm -v "$(pwd)":/infra -w /infra ghcr.io/drifthoundhq/drifthound:v0.
 | `--tool`          | Yes      | `terraform`, `terragrunt`, or `opentofu`     |
 | `--project`       | Yes      | Project key                                  |
 | `--environment`   | Yes      | Environment key                              |
+| `--environment-name` | No    | Environment display name. Defaults to the titleized environment key. When given, it also renames an existing environment. |
 | `--token`         | Yes      | API token                                    |
 | `--api-url`       | Yes      | DriftHound API base URL                      |
 | `--dir`           | No       | Directory to run the tool in (default: `.`). Stored in environment on first call only; update via GUI. |
 | `--repository`    | No       | Repository URL. **Auto-detected from git** if not provided. Stored in project on first call only; update via GUI. |
-| `--branch`        | No       | Repository branch. **Auto-detected from git** if not provided. Stored in project on first call only; update via GUI. |
+| `--branch`        | No       | Repository branch. **Auto-detected from git** if not provided. Stored on every check, and in the project on first call only. |
 | `--slack-channel` | No       | Slack Channel to send notifications to       |
 
 ## How It Works

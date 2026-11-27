@@ -44,6 +44,113 @@ class Api::V1::DriftChecksControllerTest < ActionDispatch::IntegrationTest
     assert environment.ok?
   end
 
+  test "uses environment_name as display name for new environment" do
+    post api_v1_environment_checks_path("named-project", "prod-eu-west-1"),
+      params: { status: "ok", environment_name: "Production EU West 1" },
+      headers: @auth_header,
+      as: :json
+
+    assert_response :created
+    environment = Project.find_by(key: "named-project").environments.find_by(key: "prod-eu-west-1")
+    assert_equal "Production EU West 1", environment.name
+  end
+
+  test "falls back to titleized key when environment_name is absent" do
+    post api_v1_environment_checks_path("named-project", "prod-eu-west-1"),
+      params: { status: "ok" },
+      headers: @auth_header,
+      as: :json
+
+    assert_response :created
+    environment = Project.find_by(key: "named-project").environments.find_by(key: "prod-eu-west-1")
+    assert_equal "Prod Eu West 1", environment.name
+  end
+
+  test "does not rename existing environment when environment_name is absent" do
+    project = Project.create!(name: "Named", key: "named-project")
+    environment = project.environments.create!(name: "Custom Name", key: "custom-env")
+
+    post api_v1_environment_checks_path("named-project", "custom-env"),
+      params: { status: "ok" },
+      headers: @auth_header,
+      as: :json
+
+    assert_response :created
+    assert_equal "Custom Name", environment.reload.name
+  end
+
+  test "renames existing environment when environment_name is given" do
+    project = Project.create!(name: "Named", key: "named-project")
+    environment = project.environments.create!(name: "Prod Eu West 1", key: "prod-eu-west-1")
+
+    post api_v1_environment_checks_path("named-project", "prod-eu-west-1"),
+      params: { status: "ok", environment_name: "Production EU West 1" },
+      headers: @auth_header,
+      as: :json
+
+    assert_response :created
+    assert_equal "Production EU West 1", environment.reload.name
+  end
+
+  test "rejects an environment_name longer than 255 characters" do
+    assert_no_difference [ "Project.count", "Environment.count", "DriftCheck.count" ] do
+      post api_v1_environment_checks_path("named-project", "prod-eu-west-1"),
+        params: { status: "ok", environment_name: "a" * 256 },
+        headers: @auth_header,
+        as: :json
+    end
+
+    assert_response :unprocessable_entity
+    assert_equal "environment_name is too long (maximum is 255 characters)", response.parsed_body["error"]
+  end
+
+  test "does not rename an existing environment to an overlong environment_name" do
+    project = Project.create!(name: "Named", key: "named-project")
+    environment = project.environments.create!(name: "Prod Eu West 1", key: "prod-eu-west-1")
+
+    post api_v1_environment_checks_path("named-project", "prod-eu-west-1"),
+      params: { status: "ok", environment_name: "a" * 256 },
+      headers: @auth_header,
+      as: :json
+
+    assert_response :unprocessable_entity
+    assert_equal "Prod Eu West 1", environment.reload.name
+  end
+
+  test "rejects a non-string environment_name" do
+    [ [ "a", "b" ], { "name" => "Prod" }, 42 ].each do |value|
+      assert_no_difference [ "Project.count", "Environment.count", "DriftCheck.count" ] do
+        post api_v1_environment_checks_path("named-project", "prod-eu-west-1"),
+          params: { status: "ok", environment_name: value },
+          headers: @auth_header,
+          as: :json
+      end
+
+      assert_response :unprocessable_entity, "expected 422 for #{value.inspect}"
+      assert_equal "environment_name must be a string", response.parsed_body["error"]
+    end
+  end
+
+  test "strips surrounding whitespace from environment_name" do
+    post api_v1_environment_checks_path("named-project", "prod-eu-west-1"),
+      params: { status: "ok", environment_name: "  Production EU West 1  " },
+      headers: @auth_header,
+      as: :json
+
+    assert_response :created
+    assert_equal "Production EU West 1", Project.find_by(key: "named-project").environments.find_by(key: "prod-eu-west-1").name
+  end
+
+  test "accepts an environment_name of exactly 255 characters" do
+    post api_v1_environment_checks_path("named-project", "prod-eu-west-1"),
+      params: { status: "ok", environment_name: "a" * 255 },
+      headers: @auth_header,
+      as: :json
+
+    assert_response :created
+    assert_equal "a" * 255, Project.find_by(key: "named-project").environments.find_by(key: "prod-eu-west-1").name
+  end
+
   test "creates drift check for existing project with new environment" do
     project = Project.create!(name: "Existing", key: "existing-project")
 
@@ -548,5 +655,77 @@ class Api::V1::DriftChecksControllerTest < ActionDispatch::IntegrationTest
 
     # Restore original config
     Rails.application.config.notifications = original_config
+  end
+
+  test "stores the branch on the check" do
+    post api_v1_environment_checks_path("branch-project", "production"),
+      params: { status: "ok", branch: "feature/network" },
+      headers: @auth_header,
+      as: :json
+
+    assert_response :created
+    assert_equal "feature/network", response.parsed_body["branch"]
+    assert_equal "feature/network", DriftCheck.find(response.parsed_body["id"]).branch
+  end
+
+  test "each check keeps the branch it was sent with" do
+    post api_v1_environment_checks_path("branch-project", "production"),
+      params: { status: "ok", branch: "develop" }, headers: @auth_header, as: :json
+    post api_v1_environment_checks_path("branch-project", "production"),
+      params: { status: "ok", branch: "release/2.0" }, headers: @auth_header, as: :json
+
+    environment = Project.find_by!(key: "branch-project").environments.find_by!(key: "production")
+    assert_equal [ "develop", "release/2.0" ], environment.drift_checks.order(:execution_number).pluck(:branch)
+    assert_equal "develop", environment.project.branch
+  end
+
+  test "check branch is nil when no branch is sent" do
+    post api_v1_environment_checks_path("branch-project", "production"),
+      params: { status: "ok" }, headers: @auth_header, as: :json
+
+    assert_response :created
+    assert_nil response.parsed_body["branch"]
+    assert_nil DriftCheck.find(response.parsed_body["id"]).branch
+  end
+
+  test "rejects a non-string branch" do
+    assert_no_difference "DriftCheck.count" do
+      post api_v1_environment_checks_path("branch-project", "production"),
+        params: { status: "ok", branch: { name: "main" } }, headers: @auth_header, as: :json
+    end
+
+    assert_response :unprocessable_entity
+    assert_equal "branch must be a string", response.parsed_body["error"]
+  end
+
+  test "rejects a branch longer than 255 characters" do
+    post api_v1_environment_checks_path("branch-project", "production"),
+      params: { status: "ok", branch: "b" * 256 }, headers: @auth_header, as: :json
+
+    assert_response :unprocessable_entity
+  end
+
+  test "accepts valid git branch names" do
+    [ "main", "release/5.5023", "feature/foo-bar" ].each do |name|
+      post api_v1_environment_checks_path("valid-branch", "production"),
+        params: { status: "ok", branch: name }, headers: @auth_header, as: :json
+
+      assert_response :created
+      assert_equal name, response.parsed_body["branch"]
+    end
+  end
+
+  test "rejects invalid git branch names with 422 before saving anything" do
+    [ "a..b", "bad name", "x~1", "a:b" ].each do |name|
+      assert_no_difference -> { Project.count } do
+        assert_no_difference -> { DriftCheck.count } do
+          post api_v1_environment_checks_path("invalid-branch", "production"),
+            params: { status: "ok", branch: name }, headers: @auth_header, as: :json
+        end
+      end
+
+      assert_response :unprocessable_entity
+      assert_equal({ "error" => "branch is not a valid git branch name" }, response.parsed_body)
+    end
   end
 end

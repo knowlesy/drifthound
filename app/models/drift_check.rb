@@ -8,7 +8,18 @@ class DriftCheck < ApplicationRecord
     error: 3
   }
 
+  BRANCH_MAX_LENGTH = 255
+  INVALID_BRANCH_PATTERN = %r{[\x00-\x20\x7f~^:?*\[\\]|\.\.|@\{|//|/\.|\.lock(?:/|\z)|\A[-/.]|[/.]\z}
+
+  normalizes :branch, with: ->(branch) { branch.strip.presence }
+
   validates :status, presence: true
+  validates :branch, length: { maximum: BRANCH_MAX_LENGTH }, allow_nil: true
+  validates :branch, format: { without: INVALID_BRANCH_PATTERN, message: "is not a valid git branch name" }, allow_nil: true
+
+  def self.valid_branch_name?(name)
+    !INVALID_BRANCH_PATTERN.match?(name)
+  end
 
   before_create :assign_execution_number
   after_create :update_environment_status
@@ -45,8 +56,6 @@ class DriftCheck < ApplicationRecord
     # Skip retention if disabled (0 days)
     return if retention_days.zero?
 
-    cutoff_date = retention_days.days.ago
-    old_checks = environment.drift_checks.where("created_at < ?", cutoff_date)
-    old_checks.destroy_all if old_checks.any?
+    environment.delete_checks_before(retention_days.days.ago)
   end
 end

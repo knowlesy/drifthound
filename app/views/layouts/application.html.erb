@@ -10,6 +10,17 @@
 
     <%= yield :head %>
 
+    <%= javascript_tag nonce: true do %>
+      (function () {
+        var theme;
+        try { theme = localStorage.getItem("drifthound-theme"); } catch (e) {}
+        if (theme !== "light" && theme !== "dark") {
+          theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        }
+        document.documentElement.dataset.theme = theme;
+      })();
+    <% end %>
+
     <%# Enable PWA manifest for installable apps (make sure to enable in config/routes.rb too!) %>
     <%#= tag.link rel: "manifest", href: pwa_manifest_path(format: :json) %>
 
@@ -23,23 +34,6 @@
   </head>
 
   <body>
-    <% if flash[:notice] || flash[:alert] %>
-      <div class="flash-messages">
-        <% if flash[:notice] %>
-          <div class="flash flash-notice" data-controller="flash">
-            <span><%= flash[:notice] %></span>
-            <button type="button" class="flash-close" data-action="click->flash#dismiss">&times;</button>
-          </div>
-        <% end %>
-        <% if flash[:alert] %>
-          <div class="flash flash-alert" data-controller="flash">
-            <span><%= flash[:alert] %></span>
-            <button type="button" class="flash-close" data-action="click->flash#dismiss">&times;</button>
-          </div>
-        <% end %>
-      </div>
-    <% end %>
-
     <nav class="top-nav">
       <div class="nav-container">
         <div class="nav-left">
@@ -59,6 +53,10 @@
           <% end %>
         </div>
         <div class="nav-right">
+          <button type="button" class="theme-toggle" data-controller="theme" data-action="click->theme#toggle" aria-label="Dark mode" aria-pressed="false" title="Switch to dark mode">
+            <svg class="theme-icon-moon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+            <svg class="theme-icon-sun" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
+          </button>
           <% if logged_in? %>
             <span class="nav-user">
               <%= current_user.email %>
@@ -70,6 +68,22 @@
           <% end %>
         </div>
       </div>
+      <% if flash[:notice] || flash[:alert] %>
+        <div class="flash-messages">
+          <% if flash[:notice] %>
+            <div class="flash flash-notice" data-controller="flash">
+              <span><%= flash[:notice] %></span>
+              <button type="button" class="flash-close" data-action="click->flash#dismiss">&times;</button>
+            </div>
+          <% end %>
+          <% if flash[:alert] %>
+            <div class="flash flash-alert" data-controller="flash">
+              <span><%= flash[:alert] %></span>
+              <button type="button" class="flash-close" data-action="click->flash#dismiss">&times;</button>
+            </div>
+          <% end %>
+        </div>
+      <% end %>
     </nav>
 
     <main class="container">

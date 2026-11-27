@@ -30,7 +30,10 @@ Live demo site: https://demo.drifthound.io
 - **Historical Data**: Store and track drift check history per project
 - **Project Status**: Display project status (OK / Drift / Error / Unknown)
 - **Web Dashboard**: View all projects and their drift status at a glance
+- **Role-Based Plan Visibility**: Optionally restrict raw plan output to editors or admins with `PLAN_OUTPUT_MIN_ROLE` (see the [Configuration Guide](docs/configuration.md#plan_output_min_role))
+- **Environment Overview**: See every project for one environment in a single table at `/environments/:key`
 - **Charts Dashboard**: Visual analytics with interactive charts for drift monitoring
+- **Dark Mode**: Switch between light and dark themes from the top nav; follows your OS setting until you choose
 - **Slack Notifications**: Real-time alerts when drift is detected or resolved
 
 ## Requirements
@@ -85,6 +88,31 @@ Live demo site: https://demo.drifthound.io
   make docker-setup-demo
   ```
 
+#### Testing SSO (OIDC) Login Locally
+
+Runs the app next to a mock identity provider ([mock-oauth2-server](https://github.com/navikt/mock-oauth2-server)), so you can try the OIDC login without a real provider. Run `make docker-setup` or `make docker-setup-demo` once first to create the database.
+
+  ```bash
+  make docker-oidc-start   # builds the app image, starts the app and the mock provider
+  make docker-oidc-stop
+  ```
+
+Open http://localhost:3000/login, click **Sign in with SSO**, and on the mock login page type one of these usernames (leave the claims box empty):
+
+| Username | Result |
+|----------|--------|
+| `admin`, `editor`, `viewer` | Signed in with that role |
+| `multi` | Signed in as admin (member of the viewers and admins groups; the highest role wins) |
+| `nogroups` | Refused: not in a mapped group |
+| `unverified` | Refused: the provider marks the email as not verified |
+| `clash` | Refused: the email belongs to the `make docker-setup` admin (`foo@example.com`) |
+| `clash-demo` | Refused: the email belongs to the demo admin (`admin@drifthound.io`) |
+
+The users and their claims live in `dev/oidc/mock-oauth2-server.json`. Add a block there to test another case, then run `make docker-oidc-stop` and `make docker-oidc-start` so the mock reloads the file. The OIDC settings are in `docker-compose.oidc.yml`, and `docs/configuration.md` explains each one.
+
+> [!NOTE]
+> The mock provider shares the app container's network, so `http://localhost:8090` is the same address for your browser and for the app, and no `/etc/hosts` changes are needed. Plain `http` discovery is enabled only in development (`config/initializers/oidc_local_http.rb`).
+
 
 ## CLI Usage
 
@@ -130,11 +158,20 @@ curl -X POST \
   }'
 ```
 
+Read past drift checks (newest first, paginated, without plan output) to chart trends elsewhere:
+
+```bash
+curl -H "Authorization: Bearer YOUR_API_TOKEN" \
+  "http://localhost:3000/api/v1/checks?project=my-project&since=2025-11-01"
+```
+
 **Generate an API Token:**
 
 1. Log in as admin at `/login`
 2. Click **API Tokens** in the navigation bar
 3. Create a new token and copy it (it's only shown once!)
+
+Tokens are read and write by default. Choose **Read only** for dashboards or reporting tools that only need the `GET` endpoints, or **Read only, with plan output** if they also need to read plans. Both receive `403 Forbidden` on writes.
 
 📖 See [docs/api-usage.md](docs/api-usage.md) for complete API documentation, including advanced features and examples.
 
@@ -188,3 +225,7 @@ flowchart LR
 ## License
 
 AGPL-3.0
+
+## Thank you contributors! :heart:
+
+[![](https://contrib.rocks/image?repo=drifthoundhq/drifthound)](https://github.com/drifhoundhq/drifthound/graphs/contributors)

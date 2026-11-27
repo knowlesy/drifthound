@@ -16,6 +16,9 @@
         <span class="environment-title" title="<%= @environment.name %>"><%= @environment.name %></span>
         <span class="env-separator">&bull;</span>
         <span class="status-pill status-pill--<%= last_status %>"><%= last_status.upcase %></span>
+        <% if @environment.exclude_from_metrics? %>
+          <span class="badge badge-info" title="Left out of the dashboard charts and stability score">Excluded from metrics</span>
+        <% end %>
       </div>
       <div>
         <% if @environment.last_checked_at %>
@@ -25,7 +28,7 @@
         <% end %>
       </div>
     </div>
-    <% if @project.repository.present? || @environment.directory.present? || @slack_channel.present? || policy(@environment).destroy? %>
+    <% if @project.repository.present? || @environment.directory.present? || @slack_channel.present? || policy(@environment).update? || policy(@environment).destroy? %>
       <div class="summary-bottom">
         <div class="summary-bottom-left">
           <% if @project.repository.present? || @environment.directory.present? %>
@@ -44,15 +47,17 @@
                   <%
                     # Build full path URL for tree view
                     repo_url = @project.repository.sub(/\.git$/, '')
-                    branch = @project.branch || "main"
+                    branch = @drift_checks.first&.branch || @project.branch || "main"
                     # Clean directory path (remove leading ./ or /)
                     clean_directory = @environment.directory.sub(%r{^\.?/}, '')
                     # Build tree path for GitHub/GitLab/Bitbucket
+                    encoded_branch = encode_url_path(branch)
+                    encoded_directory = encode_url_path(clean_directory)
                     tree_path = case @project.repository
-                    when /github\.com/ then "tree/#{branch}/#{clean_directory}"
-                    when /gitlab\.com/ then "-/tree/#{branch}/#{clean_directory}"
-                    when /bitbucket\.org/ then "src/#{branch}/#{clean_directory}"
-                    else clean_directory
+                    when /github\.com/ then "tree/#{encoded_branch}/#{encoded_directory}"
+                    when /gitlab\.com/ then "-/tree/#{encoded_branch}/#{encoded_directory}"
+                    when /bitbucket\.org/ then "src/#{encoded_branch}/#{encoded_directory}"
+                    else encoded_directory
                     end
                     full_url = "#{repo_url}/#{tree_path}"
                     display_text = "#{@project.repository.sub(%r{^https?://}, '')}/#{clean_directory}"
@@ -74,9 +79,20 @@
             </span>
           <% end %>
         </div>
-        <% if policy(@environment).destroy? %>
+        <% if policy(@environment).update? || policy(@environment).destroy? %>
           <div class="summary-bottom-right">
-            <button type="button" class="btn btn-danger-outline btn-sm" data-action="click->modal#open">Delete Environment</button>
+            <% if policy(@environment).update? %>
+              <%= button_to @environment.exclude_from_metrics? ? "Include in Metrics" : "Exclude from Metrics",
+                    project_environment_path(@project.key, @environment.key),
+                    method: :patch,
+                    params: { exclude_from_metrics: !@environment.exclude_from_metrics? },
+                    class: "btn btn-secondary btn-sm",
+                    form_class: "metrics-toggle-form",
+                    title: "Exclude this environment from the dashboard charts and stability score. It stays in every list." %>
+            <% end %>
+            <% if policy(@environment).destroy? %>
+              <button type="button" class="btn btn-danger-outline btn-sm" data-action="click->modal#open">Delete Environment</button>
+            <% end %>
           </div>
         <% end %>
       </div>
@@ -88,8 +104,26 @@
       cascade_warning: "This will also delete all #{@drift_checks.count} drift check(s) and their history." %>
   </section>
 
-  <section class="check-history">
-    <h2>Check History</h2>
+  <% can_view_plan = policy(@environment).view_plan? %>
+  <% can_delete_checks = policy(DriftCheck).destroy? %>
+  <section class="check-history" data-controller="plan-noise">
+    <div class="check-history-header">
+      <h2>Check History</h2>
+      <% if can_delete_checks && @drift_checks.any? %>
+        <%= form_with url: project_environment_checks_path(@project.key, @environment.key), method: :delete, class: "clear-checks-form",
+              data: { turbo_confirm: "Delete every check in #{@environment.name} from before the chosen date? This cannot be undone." } do |f| %>
+          <%= f.label :before, "Clear checks before" %>
+          <%= f.date_field :before, required: true, max: Date.current.iso8601 %>
+          <%= f.submit "Clear", class: "btn btn-danger-outline btn-sm" %>
+        <% end %>
+      <% end %>
+      <% if can_view_plan && @drift_checks.any? { |check| check.raw_output.present? } %>
+        <label class="plan-noise-toggle">
+          <input type="checkbox" data-plan-noise-target="toggle" data-action="plan-noise#change">
+          Mute "(known after apply)" values in plans
+        </label>
+      <% end %>
+    </div>
     <% if @drift_checks.empty? %>
       <div class="empty-state">
         <p>No drift checks recorded yet.</p>
@@ -127,6 +161,9 @@
                 <% else %>
                   —
                 <% end %>
+                <% if check.branch.present? %>
+                  <span class="check-branch" title="Branch"><%= check.branch %></span>
+                <% end %>
               </span>
               <span class="col-duration">
                 <% if check.duration.present? %>
@@ -139,18 +176,28 @@
                 <%= check.created_at.strftime('%b %d, %I:%M %p') %>
               </span>
               <span class="col-actions">
-                <% if check.raw_output.present? %>
+                <% if check.raw_output.present? && can_view_plan %>
                   <button class="expand-btn" data-expandable-target="button">
                     <span class="expand-icon">▶</span> Plan
                   </button>
+                <% elsif check.raw_output.present? %>
+                  <span class="no-output plan-restricted" title="Plan output is restricted to higher roles">Plan output restricted</span>
                 <% else %>
                   <span class="no-output">—</span>
                 <% end %>
+                <% if can_delete_checks %>
+                  <%= button_to "Delete", project_environment_check_path(@project.key, @environment.key, check),
+                        method: :delete,
+                        class: "btn btn-danger-outline btn-sm",
+                        form_class: "delete-check-form",
+                        form: { data: { expandable_ignore: true } },
+                        data: { turbo_confirm: "Delete check ##{check.execution_number}? This cannot be undone." } %>
+                <% end %>
               </span>
             </div>
-            <% if check.raw_output.present? %>
+            <% if check.raw_output.present? && can_view_plan %>
               <div class="check-output" data-expandable-target="content" hidden>
-                <pre><code><%= check.raw_output %></code></pre>
+                <pre><code><%= colorize_plan_output(check.raw_output) %></code></pre>
               </div>
             <% end %>
           </div>

@@ -1,5 +1,54 @@
 # Changelog
 
+## [0.9.2](https://github.com/drifthoundhq/drifthound/compare/v0.9.1...v0.9.2) (2026-10-23)
+
+
+### Bug Fixes
+
+* keep the environment filter dropdown dark after picking an environment ([#176](https://github.com/drifthoundhq/drifthound/issues/176)) ([dddd12a](https://github.com/drifthoundhq/drifthound/commit/dddd12a7962661455b37c1116c9c070e0af6fa4c))
+
+## [0.9.1](https://github.com/drifthoundhq/drifthound/compare/v0.9.0...v0.9.1) (2026-10-07)
+
+
+### Bug Fixes
+
+* show flash messages below the nav bar instead of over it ([#171](https://github.com/drifthoundhq/drifthound/issues/171)) ([39b0e20](https://github.com/drifthoundhq/drifthound/commit/39b0e20e4611f749d7c77d9e64a27c83f4b5e00e))
+* show the logged out notice after logout instead of a login-required alert ([#172](https://github.com/drifthoundhq/drifthound/issues/172)) ([880023c](https://github.com/drifthoundhq/drifthound/commit/880023c12c6e7f0d200519fba990c98ced08cfbc))
+
+## [0.9.0](https://github.com/drifthoundhq/drifthound/compare/v0.8.0...v0.9.0) (2026-10-06)
+
+
+### Features
+
+* add dark mode with a theme toggle in the top nav ([#162](https://github.com/drifthoundhq/drifthound/issues/162)) ([895d176](https://github.com/drifthoundhq/drifthound/commit/895d176404b129471132c6d572ea971b3a610c84))
+* add environment overview page ([#156](https://github.com/drifthoundhq/drifthound/issues/156)) ([70bb3e5](https://github.com/drifthoundhq/drifthound/commit/70bb3e5b429e2744d6619cd2f081d3ba9ae06ab0))
+* add optional OpenID Connect login ([#157](https://github.com/drifthoundhq/drifthound/issues/157)) ([fd26f2c](https://github.com/drifthoundhq/drifthound/commit/fd26f2ce08513bc983f42f3899bad5639b9c704a))
+* delete single drift checks or clear checks before a date ([#168](https://github.com/drifthoundhq/drifthound/issues/168)) ([4291b33](https://github.com/drifthoundhq/drifthound/commit/4291b33619cdc86050ac914bfc2b692a1ca593bb))
+* exclude environments from dashboard metrics ([#166](https://github.com/drifthoundhq/drifthound/issues/166)) ([8ecdbb6](https://github.com/drifthoundhq/drifthound/commit/8ecdbb6f854c815891cc957c29284b5f770b6223))
+* store the branch on each drift check ([#167](https://github.com/drifthoundhq/drifthound/issues/167)) ([c26c1cf](https://github.com/drifthoundhq/drifthound/commit/c26c1cffeaa7262aff6b5a7114a16c0972ed59a3))
+
+
+### Bug Fixes
+
+* show top-row chart info tooltips above the sticky filter bar ([#169](https://github.com/drifthoundhq/drifthound/issues/169)) ([783decb](https://github.com/drifthoundhq/drifthound/commit/783decb134db99c2302233d9361d298efb359d0e))
+
+## [0.8.0](https://github.com/drifthoundhq/drifthound/compare/v0.7.0...v0.8.0) (2026-10-02)
+
+
+### Features
+
+* add check history API endpoints ([#144](https://github.com/drifthoundhq/drifthound/issues/144)) ([@knowlesy](https://github.com/knowlesy)) ([e6ebe2b](https://github.com/drifthoundhq/drifthound/commit/e6ebe2bf71a542d4798e722eb7190665d3d8d5d1))
+* add read-only API token access level ([#143](https://github.com/drifthoundhq/drifthound/issues/143)) ([@knowlesy](https://github.com/knowlesy)) ([4907370](https://github.com/drifthoundhq/drifthound/commit/490737090d3a4d263f0851fb27393868298734e9))
+* allow restricting plan output to a minimum role ([#141](https://github.com/drifthoundhq/drifthound/issues/141)) ([@knowlesy](https://github.com/knowlesy)) ([6e6587b](https://github.com/drifthoundhq/drifthound/commit/6e6587b2f87761e4fa119e57c0190830168b6f8d))
+* allow setting environment display name from API and CLI ([#139](https://github.com/drifthoundhq/drifthound/issues/139)) ([@knowlesy](https://github.com/knowlesy)) ([30469ab](https://github.com/drifthoundhq/drifthound/commit/30469ab41fae81860a830671190619476fe62525))
+
+## [0.7.0](https://github.com/drifthoundhq/drifthound/compare/v0.6.0...v0.7.0) (2026-09-30)
+
+
+### Features
+
+* colorize terraform plan output in check history ([#146](https://github.com/drifthoundhq/drifthound/issues/146)) ([b109307](https://github.com/drifthoundhq/drifthound/commit/b1093073f35033bc17e59d38444b278d400eb1ea)), closes [#137](https://github.com/drifthoundhq/drifthound/issues/137)
+
 ## [0.6.0](https://github.com/drifthoundhq/drifthound/compare/v0.5.1...v0.6.0) (2026-04-19)
 
 

@@ -14,10 +14,12 @@ Rails.application.routes.draw do
     namespace :v1 do
       # Write endpoint (existing)
       post "projects/:project_key/environments/:environment_key/checks", to: "drift_checks#create", as: :environment_checks
+      get "projects/:project_key/environments/:environment_key/checks", to: "checks#index"
+      get "checks", to: "checks#index", as: :checks
 
       # Read endpoints (new)
       resources :projects, only: [ :index, :show ], param: :key do
-        resources :environments, only: [ :index, :show ], param: :key do
+        resources :environments, only: [ :index, :show, :update ], param: :key do
           member do
             get :drift
           end
@@ -34,6 +36,9 @@ Rails.application.routes.draw do
   # OAuth routes
   get "auth/github", to: "oauth_callbacks#github_redirect", as: :auth_github
   get "auth/github/callback", to: "oauth_callbacks#github", as: :auth_github_callback
+  post "auth/oidc", to: "oauth_callbacks#oidc_redirect", as: :auth_oidc
+  get "auth/oidc/callback", to: "oauth_callbacks#oidc", as: :auth_oidc_callback
+  get "auth/failure", to: "oauth_callbacks#failure", as: :auth_failure
 
   # Registration via invite
   get "register/:token", to: "registrations#new", as: :register
@@ -50,8 +55,12 @@ Rails.application.routes.draw do
 
   # Dashboard routes
   root "dashboard#index"
+  get "environments/:key", to: "environment_overviews#show", as: :environment_overview
   get "projects/:key", to: "projects#show", as: :project
   delete "projects/:key", to: "projects#destroy"
   get "projects/:project_key/environments/:key", to: "environments#show", as: :project_environment
+  patch "projects/:project_key/environments/:key", to: "environments#update"
   delete "projects/:project_key/environments/:key", to: "environments#destroy"
+  delete "projects/:project_key/environments/:key/checks", to: "drift_checks#clear", as: :project_environment_checks
+  delete "projects/:project_key/environments/:key/checks/:id", to: "drift_checks#destroy", as: :project_environment_check
 end

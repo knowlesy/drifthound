@@ -1,5 +1,5 @@
 import { Controller } from "@hotwired/stimulus"
-import Chart from "chart.js/auto"
+import Chart from "charts"
 
 export default class extends Controller {
   static targets = ["canvas"]
@@ -113,7 +113,7 @@ export default class extends Controller {
 
           // Draw label
           ctx.font = "12px sans-serif";
-          ctx.fillStyle = "#6b7280";
+          ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--color-text-muted").trim() || "#6b7280";
           ctx.fillText("Stability", centerX, centerY + 16);
 
           ctx.restore();

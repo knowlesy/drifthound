@@ -41,9 +41,9 @@ export default class extends Controller {
     // Highlight active badge
     this.statusBadgeTargets.forEach(badge => {
       if (badge.dataset.statusFilter === this.activeStatus) {
-        badge.style.boxShadow = '0 0 0 3px #2563eb55';
+        badge.style.boxShadow = '0 0 0 3px var(--color-filter-active-ring)';
         badge.style.transform = 'scale(1.05)';
-        badge.style.background = '#e0e7ff';
+        badge.style.background = 'var(--color-filter-active-bg)';
       } else {
         badge.style.boxShadow = '';
         badge.style.transform = '';
@@ -53,8 +53,8 @@ export default class extends Controller {
     // Highlight env filter
     if (this.hasEnvFilterTarget) {
       if (envValue) {
-        this.envFilterTarget.style.backgroundColor = '#e0e7ff';
-        this.envFilterTarget.style.boxShadow = '0 0 0 2px #2563eb55';
+        this.envFilterTarget.style.backgroundColor = 'var(--color-filter-active-bg)';
+        this.envFilterTarget.style.boxShadow = '0 0 0 2px var(--color-filter-active-ring)';
       } else {
         this.envFilterTarget.style.backgroundColor = '';
         this.envFilterTarget.style.boxShadow = '';
@@ -70,8 +70,8 @@ export default class extends Controller {
     // Highlight env filter when active
     if (this.hasChartEnvFilterTarget) {
       if (envValue) {
-        this.chartEnvFilterTarget.style.backgroundColor = '#e0e7ff';
-        this.chartEnvFilterTarget.style.boxShadow = '0 0 0 2px #2563eb55';
+        this.chartEnvFilterTarget.style.backgroundColor = 'var(--color-filter-active-bg)';
+        this.chartEnvFilterTarget.style.boxShadow = '0 0 0 2px var(--color-filter-active-ring)';
       } else {
         this.chartEnvFilterTarget.style.backgroundColor = '';
         this.chartEnvFilterTarget.style.boxShadow = '';
