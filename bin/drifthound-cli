@@ -824,6 +824,168 @@ module DriftHoundCli
         raise ArgoError, parts.join('; ')
       end
     end
+
+    # The Argo CD Applications that deploy to the scanned cluster. Applications of other
+    # clusters are dropped: an ApplicationSet that deploys the same manifests everywhere would
+    # otherwise make one cluster's resource list mark another cluster's objects as owned.
+    class Applications
+      attr_reader :instance_names, :destination_namespaces, :in_scope_count
+
+      def self.parse(text, destinations:, argo_namespaces:)
+        body = JSON.parse(text.to_s)
+        items = body.is_a?(Hash) ? body['items'] : body
+        raise ArgoError, 'kubectl get applications returned an unexpected JSON shape' unless items.is_a?(Array) && items.all? { |item| item.is_a?(Hash) }
+
+        new(items, destinations, argo_namespaces)
+      rescue JSON::ParserError
+        raise ArgoError, 'kubectl get applications did not return valid JSON'
+      end
+
+      def self.label_value(value)
+        value.to_s[0, 63].sub(/[^A-Za-z0-9]+\z/, '')
+      end
+
+      def initialize(items, destinations, argo_namespaces)
+        wanted = destinations.map { |d| d.to_s.chomp('/').downcase }
+        @instance_names = Set.new
+        @label_values = Set.new
+        @destination_namespaces = Set.new
+        @keys = Set.new
+        @cluster_keys = Set.new
+        @in_scope_count = 0
+        seen = Set.new
+
+        items.each do |app|
+          destination = dig(app, 'spec', 'destination')
+          server = destination['server'].to_s
+          dest_name = destination['name'].to_s
+          seen << (server.empty? ? dest_name : server)
+          next unless [ server, dest_name ].any? { |d| !d.empty? && wanted.include?(d.chomp('/').downcase) }
+
+          @in_scope_count += 1
+          add_application(app, destination, argo_namespaces)
+        end
+
+        raise ArgoError, 'no Argo CD Applications were found (are the Argo CD CRDs installed in this cluster?)' if items.empty?
+        raise ArgoError, "no Argo CD Application deploys to #{destinations.join(' or ')}; Applications target: #{seen.to_a.sort.join(', ')}" if @in_scope_count.zero?
+      end
+
+      # label-tracked objects carry the instance name cut to 63 characters
+      def known_label?(value)
+        !value.to_s.empty? && @label_values.include?(self.class.label_value(value))
+      end
+
+      def known_instance?(name)
+        @instance_names.include?(name)
+      end
+
+      def destination_namespace?(name)
+        @destination_namespaces.include?(name)
+      end
+
+      # An object that an in-scope Application lists in status.resources
+      def lists?(object)
+        group = object.group.downcase
+        kind = object.kind.downcase
+        if object.cluster_scoped?
+          @cluster_keys.include?("#{group}/#{kind}/#{object.name.downcase}")
+        else
+          @keys.include?("#{group}/#{kind}/#{object.namespace.downcase}/#{object.name.downcase}")
+        end
+      end
+
+      private
+
+      def dig(hash, *path)
+        value = path.inject(hash) { |node, key| node.is_a?(Hash) ? node[key] : nil }
+        value.is_a?(Hash) ? value : {}
+      end
+
+      def add_application(app, destination, argo_namespaces)
+        meta = dig(app, 'metadata')
+        namespace = meta['namespace'].to_s
+        name = meta['name'].to_s
+        instance = namespace.empty? || argo_namespaces.include?(namespace) ? name : "#{namespace}_#{name}"
+        @instance_names << instance
+        @label_values << self.class.label_value(instance)
+        @destination_namespaces << destination['namespace'].to_s unless destination['namespace'].to_s.empty?
+
+        resources = dig(app, 'status')['resources']
+        Array(resources).each do |entry|
+          next unless entry.is_a?(Hash) && !entry['kind'].to_s.empty? && !entry['name'].to_s.empty?
+
+          group = entry['group'].to_s.downcase
+          kind = entry['kind'].to_s.downcase
+          @cluster_keys << "#{group}/#{kind}/#{entry['name'].to_s.downcase}"
+          @keys << "#{group}/#{kind}/#{entry['namespace'].to_s.downcase}/#{entry['name'].to_s.downcase}"
+        end
+      end
+    end
+
+    # Decides from the markers on a live object whether Argo CD owns it, the way Argo CD does
+    module Tracking
+      Verdict = Struct.new(:owned, :reason, :group_mismatch) do
+        def owned?
+          owned
+        end
+      end
+
+      OWNED = Verdict.new(true, nil, false).freeze
+
+      def self.unowned(reason)
+        Verdict.new(false, reason, false)
+      end
+
+      # Parses <app>:<group>/<kind>:<namespace>/<name>. Returns nil when it is not in that shape.
+      def self.parse_tracking_id(value)
+        parts = value.to_s.split(':', 3)
+        return nil unless parts.size == 3 && !parts[0].empty?
+
+        group_kind = parts[1].split('/', -1)
+        namespace_name = parts[2].split('/', -1)
+        return nil unless group_kind.size == 2 && namespace_name.size == 2 && !group_kind[1].empty? && !namespace_name[1].empty?
+
+        { app: parts[0], group: group_kind[0], kind: group_kind[1], namespace: namespace_name[0], name: namespace_name[1] }
+      end
+
+      def self.owner(object, apps:, method:, installation_id: nil)
+        method == 'label' ? label_owner(object, apps) : annotation_owner(object, apps, installation_id)
+      end
+
+      def self.label_owner(object, apps)
+        return unowned('untracked') if object.instance_label.empty?
+
+        apps.known_label?(object.instance_label) ? OWNED : unowned('unknown-application')
+      end
+
+      # annotation and annotation+label use the annotation alone; the label is informational then
+      def self.annotation_owner(object, apps, installation_id)
+        return unowned('untracked') if object.tracking_id.empty?
+        return unowned('installation-id-mismatch') if installation_id && object.installation_id != installation_id
+
+        parsed = parse_tracking_id(object.tracking_id)
+        return unowned('invalid-tracking-id') unless parsed
+
+        # A cluster-scoped object carries the destination namespace in the annotation
+        same = parsed[:kind] == object.kind && parsed[:name] == object.name && (parsed[:namespace] == object.namespace || object.namespace.empty?)
+        return unowned('not-self-referenced') unless same
+        return unowned('unknown-application') unless apps.known_instance?(parsed[:app])
+
+        # Argo CD compares against the desired object, whose group may differ after an API group move
+        Verdict.new(true, nil, parsed[:group] != object.group)
+      end
+
+      # Argo CD 2.x tracks by label. Run with annotation tracking against such a cluster, nearly
+      # everything would look unowned, so refuse to report instead of raising a false alarm.
+      def self.check_method!(objects, apps, method)
+        return unless method == 'annotation'
+        return if objects.any? { |object| parse_tracking_id(object.tracking_id) }
+        return unless objects.any? { |object| apps.known_label?(object.instance_label) }
+
+        raise ArgoError, 'no object carries an Argo CD tracking annotation, but objects carry the instance label of known Applications; ' \
+                         'this Argo CD may use label tracking, so pass --tracking-method=label (and --instance-label-key if it is customised)'
+      end
+    end
   end
 
   module Modes
@@ -914,6 +1076,24 @@ module DriftHoundCli
                                                 context: @opts[:kube_context], timeout: @timeout)
       end
 
+      def argo_kubectl
+        Argo::Kubectl.new(@runner, bin: @opts[:kubectl] || 'kubectl', kubeconfig: @opts[:argocd_kubeconfig] || @opts[:kubeconfig],
+                                   context: @opts[:argocd_context] || @opts[:kube_context], timeout: @timeout)
+      end
+
+      def applications
+        out, err, status = argo_kubectl.applications
+        unless status.success?
+          where = @opts[:argocd_context] || @opts[:kube_context] || 'the current context'
+          raise ArgoError, "Argo CD CRDs not found in #{where}: #{Argo.clip(err)}" if err =~ /doesn't have a resource type|\(NotFound\)/i
+
+          raise ArgoError, "kubectl get applications failed (exit #{status.exitstatus}): #{Argo.clip(err)}"
+        end
+
+        destinations = @destinations.empty? ? DEFAULT_DESTINATIONS : @destinations
+        Argo::Applications.parse(out, destinations: destinations, argo_namespaces: @argo_namespaces)
+      end
+
       def cluster_name
         name = @opts[:cluster_name] || @opts[:kube_context] || kubectl.current_context || 'in-cluster'
         name[0, CLUSTER_NAME_LIMIT]
@@ -926,8 +1106,11 @@ module DriftHoundCli
 
       # Returns [unowned_items, summary_text]; raises ArgoError on any failure
       def collect
-        inventory.collect
-        raise ArgoError, 'ownership analysis is not implemented yet'
+        cluster = cluster_name
+        apps = applications
+        result = inventory.collect
+        Argo::Tracking.check_method!(result.objects, apps, @tracking_method)
+        raise ArgoError, "ownership analysis is not implemented yet (#{cluster}, #{apps.in_scope_count} Applications)"
       end
     end
   end

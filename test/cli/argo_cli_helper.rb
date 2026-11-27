@@ -33,6 +33,14 @@ module ArgoCliFixtures
              uid: argo_uid(kind, namespace, name), created_at: "2026-01-01T00:00:00Z", **attrs)
   end
 
+  def argo_kube(api_version, kind, namespace, name, **attrs)
+    DriftHoundCli::Argo.parse_lines(argo_obj(api_version, kind, namespace, name, **attrs), kind).sole
+  end
+
+  def argo_apps(file = "applications.json", destinations: DriftHoundCli::Modes::ArgoUnowned::DEFAULT_DESTINATIONS, namespaces: [ "argocd" ])
+    DriftHoundCli::Argo::Applications.parse(argo_fixture(file), destinations: destinations, argo_namespaces: namespaces)
+  end
+
   def argo_track(app, group, kind, namespace, name)
     "#{app}:#{group}/#{kind}:#{namespace}/#{name}"
   end
@@ -51,7 +59,9 @@ module ArgoCliFixtures
         argo_obj("apps/v1", "Deployment", "shop", "redis", managed_by: "Helm", instance_label: "redis", app_name: "redis",
                  helm_release: "redis", helm_release_ns: "shop", helm_chart: "redis-19.0.0"),
         # hand-made Deployment with a ReplicaSet and a Pod below it
-        argo_obj("apps/v1", "Deployment", "scratch", "hand")
+        argo_obj("apps/v1", "Deployment", "scratch", "hand"),
+        # listed only by an Application that deploys to another cluster, so it is not owned here
+        argo_obj("apps/v1", "Deployment", "shop", "web2")
       ].join,
       "replicasets.apps" => [
         argo_obj("apps/v1", "ReplicaSet", "shop", "web-7d9", owner_refs: web),

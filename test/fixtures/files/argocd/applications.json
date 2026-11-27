@@ -1,0 +1,134 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "argoproj.io/v1alpha1",
+      "kind": "Application",
+      "metadata": {
+        "name": "root",
+        "namespace": "argocd"
+      },
+      "spec": {
+        "destination": {
+          "server": "https://kubernetes.default.svc",
+          "namespace": "argocd"
+        }
+      },
+      "status": {
+        "resources": []
+      }
+    },
+    {
+      "apiVersion": "argoproj.io/v1alpha1",
+      "kind": "Application",
+      "metadata": {
+        "name": "web",
+        "namespace": "argocd"
+      },
+      "spec": {
+        "destination": {
+          "server": "https://kubernetes.default.svc",
+          "namespace": "shop"
+        }
+      },
+      "status": {
+        "resources": [
+          {
+            "group": "apps",
+            "version": "v1",
+            "kind": "Deployment",
+            "name": "web",
+            "status": "Synced",
+            "namespace": "shop"
+          },
+          {
+            "group": "apps",
+            "version": "v1",
+            "kind": "StatefulSet",
+            "name": "db",
+            "status": "Synced",
+            "namespace": "shop"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "argoproj.io/v1alpha1",
+      "kind": "Application",
+      "metadata": {
+        "name": "web",
+        "namespace": "team-a"
+      },
+      "spec": {
+        "destination": {
+          "name": "in-cluster",
+          "namespace": "team-a"
+        }
+      },
+      "status": {
+        "resources": [
+          {
+            "group": "",
+            "version": "v1",
+            "kind": "ConfigMap",
+            "name": "team-cfg",
+            "status": "Synced",
+            "namespace": "team-a"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "argoproj.io/v1alpha1",
+      "kind": "Application",
+      "metadata": {
+        "name": "widgets",
+        "namespace": "argocd"
+      },
+      "spec": {
+        "destination": {
+          "server": "https://kubernetes.default.svc",
+          "namespace": "shop"
+        }
+      },
+      "status": {
+        "resources": [
+          {
+            "group": "apiextensions.k8s.io",
+            "version": "v1",
+            "kind": "CustomResourceDefinition",
+            "name": "widgets.example.com",
+            "status": "Synced"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "argoproj.io/v1alpha1",
+      "kind": "Application",
+      "metadata": {
+        "name": "web2-remote",
+        "namespace": "argocd"
+      },
+      "spec": {
+        "destination": {
+          "server": "https://other-cluster:443",
+          "namespace": "shop"
+        }
+      },
+      "status": {
+        "resources": [
+          {
+            "group": "apps",
+            "version": "v1",
+            "kind": "Deployment",
+            "name": "web2",
+            "status": "Synced",
+            "namespace": "shop"
+          }
+        ]
+      }
+    }
+  ]
+}
