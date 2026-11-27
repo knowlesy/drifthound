@@ -1,0 +1,75 @@
+<% can_manage = policy(UnmanagedIgnoreRule).create? %>
+<section class="ignore-rules">
+  <h2>Unmanaged resource ignore rules</h2>
+  <p class="ignore-rules-help">Rules apply to checks received from now on. Existing checks are not changed.</p>
+
+  <% if rules.empty? %>
+    <p class="unmanaged-empty">No custom rules yet.</p>
+  <% else %>
+    <table class="unmanaged-table">
+      <thead>
+        <tr>
+          <th>Field</th>
+          <th>Match</th>
+          <th>Pattern</th>
+          <th>Source</th>
+          <th>Note</th>
+          <% if can_manage %><th></th><% end %>
+        </tr>
+      </thead>
+      <tbody>
+        <% rules.each do |rule| %>
+          <tr>
+            <td><%= rule.field %></td>
+            <td><%= rule.match_type %></td>
+            <td class="unmanaged-identifier"><%= rule.pattern %></td>
+            <td><%= rule.source || "any" %></td>
+            <td><%= rule.note %></td>
+            <% if can_manage %>
+              <td>
+                <%= button_to "Delete", project_environment_ignore_rule_path(project.key, environment.key, rule),
+                      method: :delete,
+                      class: "btn btn-danger-outline btn-sm",
+                      data: { turbo_confirm: "Delete this ignore rule?" } %>
+              </td>
+            <% end %>
+          </tr>
+        <% end %>
+      </tbody>
+    </table>
+  <% end %>
+
+  <% if can_manage %>
+    <%= form_with scope: :unmanaged_ignore_rule, url: project_environment_ignore_rules_path(project.key, environment.key), class: "ignore-rule-form" do |f| %>
+      <%= f.select :field, UnmanagedIgnoreRule::FIELDS, {}, "aria-label": "Field" %>
+      <%= f.select :match_type, UnmanagedIgnoreRule::MATCH_TYPES, {}, "aria-label": "Match type" %>
+      <%= f.text_field :pattern, placeholder: "Pattern, for example */resourceGroups/tmp-*", required: true, maxlength: UnmanagedIgnoreRule::PATTERN_MAX_LENGTH, "aria-label": "Pattern" %>
+      <%= f.select :source, DriftCheck.sources.keys, { include_blank: "Any source" }, "aria-label": "Source" %>
+      <%= f.text_field :note, placeholder: "Note (optional)", maxlength: 255, "aria-label": "Note" %>
+      <%= f.submit "Add rule", class: "btn btn-sm" %>
+    <% end %>
+  <% end %>
+
+  <% builtin = BuiltinIgnoreRules::REGISTRY.slice(*sources) %>
+  <% if builtin.any? %>
+    <details class="builtin-rules">
+      <summary>Built-in rules</summary>
+      <% builtin.each do |source, source_rules| %>
+        <h3><%= source %></h3>
+        <table class="unmanaged-table">
+          <thead>
+            <tr><th>Pattern</th><th>Note</th></tr>
+          </thead>
+          <tbody>
+            <% source_rules.each do |rule| %>
+              <tr>
+                <td class="unmanaged-identifier"><%= rule.pattern %></td>
+                <td><%= rule.note %></td>
+              </tr>
+            <% end %>
+          </tbody>
+        </table>
+      <% end %>
+    </details>
+  <% end %>
+</section>

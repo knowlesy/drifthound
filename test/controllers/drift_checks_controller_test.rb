@@ -121,4 +121,94 @@ class DriftChecksControllerTest < ActionDispatch::IntegrationTest
     assert_select "form.delete-check-form", 0
     assert_select "form.clear-checks-form", 0
   end
+
+  # --- unmanaged resources frame ---
+
+  def azure_check
+    check = @env.drift_checks.create!(status: :drift, source: "azure", unmanaged_count: 1, unmanaged_ignored_count: 1)
+    check.unmanaged_resources.create!(identifier: "/subscriptions/0000/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/sa1", resource_type: "microsoft.storage/storageaccounts", name: "sa1", scope: "rg1", location: "westeurope")
+    check.unmanaged_resources.create!(identifier: "/subscriptions/0000/resourceGroups/MC_x", ignored: true, ignore_reason: "Built-in: AKS node resource group")
+    check
+  end
+
+  test "unmanaged frame lists reported and ignored resources with an ignore button for admins" do
+    check = azure_check
+
+    get project_environment_check_unmanaged_path(@project.key, @env.key, check)
+
+    assert_response :success
+    assert_select "turbo-frame#unmanaged_drift_check_#{check.id}"
+    assert_select ".unmanaged-table td", text: /storageAccounts\/sa1/
+    assert_select "details.unmanaged-ignored td", text: "Built-in: AKS node resource group"
+    assert_select "form[action=?] input[name='unmanaged_ignore_rule[pattern]'][value=?]",
+      project_environment_ignore_rules_path(@project.key, @env.key),
+      "/subscriptions/0000/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/sa1"
+    assert_select "form input[name='unmanaged_ignore_rule[match_type]'][value=exact]"
+  end
+
+  test "unmanaged frame has no ignore button for viewers" do
+    check = azure_check
+    login_as users(:viewer)
+
+    get project_environment_check_unmanaged_path(@project.key, @env.key, check)
+
+    assert_response :success
+    assert_select ".unmanaged-table td", text: /storageAccounts\/sa1/
+    assert_select ".unmanaged-list form", count: 0
+  end
+
+  test "unmanaged frame is forbidden when plan output is restricted above the user's role" do
+    check = azure_check
+    original = Rails.application.config.plan_output_min_role
+    Rails.application.config.plan_output_min_role = "admin"
+    login_as users(:viewer)
+
+    get project_environment_check_unmanaged_path(@project.key, @env.key, check)
+
+    assert_response :forbidden
+    assert_not_includes response.body, "storageAccounts"
+  ensure
+    Rails.application.config.plan_output_min_role = original
+  end
+
+  test "unmanaged frame follows public mode" do
+    check = azure_check
+    delete logout_path
+
+    get project_environment_check_unmanaged_path(@project.key, @env.key, check)
+    assert_redirected_to login_path
+
+    Rails.application.config.public_mode = true
+    get project_environment_check_unmanaged_path(@project.key, @env.key, check)
+    assert_response :success
+    assert_select ".unmanaged-list form", count: 0
+
+    original = Rails.application.config.plan_output_min_role
+    Rails.application.config.plan_output_min_role = "editor"
+    get project_environment_check_unmanaged_path(@project.key, @env.key, check)
+    assert_response :forbidden
+  ensure
+    Rails.application.config.public_mode = false
+    Rails.application.config.plan_output_min_role = original if original
+  end
+
+  test "unmanaged frame is not found for another environment's check" do
+    other_env = @project.environments.create!(name: "Other", key: "other")
+    other_check = other_env.drift_checks.create!(status: :ok, source: "azure", unmanaged_count: 0)
+
+    get project_environment_check_unmanaged_path(@project.key, @env.key, other_check)
+
+    assert_response :not_found
+  end
+
+  test "history page embeds a lazy unmanaged frame only for checks with an inventory" do
+    check = azure_check
+
+    get project_environment_path(@project.key, @env.key)
+
+    assert_select "turbo-frame#unmanaged_drift_check_#{check.id}[loading=lazy][src=?]",
+      project_environment_check_unmanaged_path(@project.key, @env.key, check)
+    assert_select "turbo-frame[id^=unmanaged_drift_check_]", count: 1
+    assert_select ".expand-btn", text: /Details/
+  end
 end
