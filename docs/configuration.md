@@ -114,7 +114,7 @@ PUBLIC_MODE=true
 
 ### PLAN_OUTPUT_MIN_ROLE
 
-Minimum role required to see the raw Terraform plan output on an environment page. Plan output can include resource attributes and values that you may not want every viewer to read.
+Minimum role required to see the raw Terraform plan output on an environment page. Plan output can include resource attributes and values that you may not want every viewer to read. The same setting gates the list of unmanaged resources: it shows subscription IDs, resource names and tags, so it is shown only to users who may see plan output. The counts stay visible to everyone.
 
 **Required:** No
 **Default:** `viewer` (everyone who can open the environment page sees plan output, the same as before this setting existed)
@@ -197,6 +197,7 @@ When logged in as admin, you can:
 - Delete environments (cascades to all drift checks)
 - Delete a single drift check, or clear an environment's checks from before a date, from the environment page. The environment's status and last check time move to the newest remaining check, and no notification is sent.
 - Exclude environments from dashboard metrics (see below)
+- Add and delete unmanaged resource ignore rules on the environment page (editors and viewers can see the rules but not change them; `write` API tokens can manage them, see [API Usage](api-usage.md#ignore-rules))
 
 ### Excluding Environments From Dashboard Metrics
 
@@ -474,6 +475,7 @@ DRIFT_CHECK_RETENTION_DAYS=90
 - Each drift check consumes approximately 1-2 KB of database storage
 - With 100 environments running daily checks at 90-day retention: ~9,000 checks (~18 MB)
 - Adjust based on your number of environments and check frequency
+- Unmanaged resource rows are deleted together with their check. A check that reports many unmanaged resources is much larger: allow roughly 0.5 KB per row, so 5,000 rows (the maximum per check) is about 2.5 MB. For daily checks at 90-day retention that is up to about 225 MB per environment in the worst case.
 
 **Example configurations:**
 

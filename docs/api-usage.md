@@ -1,6 +1,6 @@
 # API Usage
 
-DriftHound provides a RESTful API for submitting Terraform drift check results.
+DriftHound provides a RESTful API for submitting drift check results. A check is either a Terraform-style plan result (`source: terraform`, the default) or an inventory of unmanaged resources from another source such as Azure.
 
 ## Authentication
 
@@ -53,7 +53,9 @@ curl -X POST \
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `status` | string | Yes | One of: `ok`, `drift`, `error`, `unknown` |
+| `status` | string | Yes for `terraform` | One of: `ok`, `drift`, `error`, `unknown`. Required when `source` is `terraform`; defaults to `ok` for other sources. A value that is not one of these is rejected with `422` before anything is created. See [Status rules](#status-rules). |
+| `source` | string | No | Where the check came from: `terraform` (default), `azure` or `argocd`. Any other value is rejected with `422` and nothing is created. |
+| `unmanaged_resources` | array | No | Resources that exist but are not managed. JSON body only; see [Unmanaged Resources](#unmanaged-resources). |
 | `add_count` | integer | No | Number of resources to add |
 | `change_count` | integer | No | Number of resources to change |
 | `destroy_count` | integer | No | Number of resources to destroy |
@@ -75,10 +77,15 @@ curl -X POST \
   "project_key": "my-project",
   "environment_key": "my-env",
   "status": "drift",
+  "source": "terraform",
+  "unmanaged_count": null,
+  "unmanaged_ignored_count": null,
   "branch": "master",
   "created_at": "2025-11-27T10:30:00Z"
 }
 ```
+
+`unmanaged_count` and `unmanaged_ignored_count` are `null` when the check sent no `unmanaged_resources`.
 
 **Error Responses:**
 
@@ -93,6 +100,81 @@ curl -X POST \
 | `drift` | Drift detected - changes pending |
 | `error` | Error running drift check |
 | `unknown` | Initial state or unable to determine |
+
+### Unmanaged Resources
+
+A check can carry the list of resources that exist in a platform but are not managed by your infrastructure code. The `azure` source uses this to report Azure resources that are missing from Terraform state (see [Azure Unmanaged Resources](azure-unmanaged-resources.md)). Send it as a JSON array under `unmanaged_resources`:
+
+```json
+{
+  "source": "azure",
+  "status": "ok",
+  "unmanaged_resources": [
+    {
+      "identifier": "/subscriptions/0000/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/sa1",
+      "resource_type": "microsoft.storage/storageaccounts",
+      "name": "sa1",
+      "scope": "rg1",
+      "location": "westeurope",
+      "metadata": { "subscription_id": "0000", "managed_by": null, "tags": { "owner": "x" } }
+    }
+  ]
+}
+```
+
+| Field | Required | Limit |
+|-------|----------|-------|
+| `identifier` | Yes | Non-blank string, at most 1024 characters |
+| `resource_type` | No | At most 255 characters |
+| `name` | No | At most 255 characters |
+| `scope` | No | At most 255 characters (resource group or namespace) |
+| `location` | No | At most 128 characters |
+| `metadata` | No | Object, at most 2048 bytes as JSON |
+
+- At most **5000** items per check. More is rejected with `422`.
+- Strings and metadata must not contain NUL (`\u0000`) characters.
+- Duplicate identifiers (compared without case) are stored once; the first one wins.
+- Sending the key, even as `[]`, marks the check as one that reported an inventory: `unmanaged_count` and `unmanaged_ignored_count` are set (0 or more). Leaving the key out leaves both `null`.
+- Every valid row is stored. Rows that match an [ignore rule](#ignore-rules) are stored with `ignored: true` and an `ignore_reason`, and are not counted in `unmanaged_count`.
+- Any validation failure returns `422` with `{"error": "..."}` and nothing is created, not even the project or environment.
+- The parameter is left out of server logs.
+
+#### Status rules
+
+The server decides the final status before the check is stored, so the environment status and any notification follow it:
+
+1. `error` from the client always stays `error`.
+2. Otherwise the check is `drift` when the client reported `drift` or `unmanaged_count` is above 0.
+3. In all other cases the status you sent is kept.
+
+Ignore rules apply only to checks received after the rule was added. Stored checks are never re-evaluated.
+
+Use **one environment key per source** (for example `prod` for Terraform and `prod-azure` for Azure). An environment takes its status from its newest check, so mixing sources under one key would make the status flip on every run and notify each time. Ignore rules are per environment, which fits this model.
+
+### Ignore Rules
+
+Ignore rules hide known, harmless unmanaged resources. A rule belongs to one environment. Matching is `exact` (case-insensitive equality) or `glob` (case-insensitive; `*` also matches `/`, `?` and `[...]` work, braces are literal). There is no regex support.
+
+| Endpoint | Token | Description |
+|----------|-------|-------------|
+| `GET /api/v1/projects/:project_key/environments/:environment_key/ignore_rules` | any | The environment's rules and the built-in rules |
+| `POST /api/v1/projects/:project_key/environments/:environment_key/ignore_rules` | `write` | Create a rule |
+| `DELETE /api/v1/projects/:project_key/environments/:environment_key/ignore_rules/:id` | `write` | Delete a rule (`204`) |
+
+`POST` body: `pattern` (required, at most 512 printable characters), `field` (`identifier` by default, or `resource_type`, `name`, `scope`, `location`), `match_type` (`glob` by default, or `exact`), `source` (omit for all sources) and `note` (at most 255 characters). Every value must be a string. An environment can have at most 200 rules, and the same rule cannot be added twice. An invalid rule returns `422`; an unknown project, environment or rule returns `404` (nothing is auto-created).
+
+```json
+{
+  "ignore_rules": [
+    { "id": 1, "field": "identifier", "match_type": "glob", "pattern": "*/resourceGroups/tmp-*", "source": null, "note": "scratch groups", "created_at": "2026-11-27T10:30:00Z" }
+  ],
+  "builtin_rules": {
+    "azure": [
+      { "key": "aks-node-rg", "field": "identifier", "match_type": "glob", "pattern": "/subscriptions/*/resourceGroups/MC_*", "note": "AKS node resource group" }
+    ]
+  }
+}
+```
 
 ### List Drift Check History
 
@@ -113,6 +195,7 @@ Read past drift checks, for example to chart drift trends in an external dashboa
 | `cursor` | string | No | The `next_cursor` value from the previous page |
 | `project` | string | No | `GET /api/v1/checks` only: filter by project key |
 | `environment` | string | No | `GET /api/v1/checks` only: filter by environment key |
+| `source` | string | No | Only checks from one source: `terraform`, `azure` or `argocd` |
 
 **Example Request:**
 
@@ -137,6 +220,9 @@ curl -H "Authorization: Bearer YOUR_API_TOKEN" \
       "duration": 8,
       "execution_number": 42,
       "branch": "main",
+      "source": "terraform",
+      "unmanaged_count": null,
+      "unmanaged_ignored_count": null,
       "created_at": "2025-11-27T10:30:00Z",
       "change_summary": "2 to add, 1 to change"
     }
@@ -151,11 +237,13 @@ curl -H "Authorization: Bearer YOUR_API_TOKEN" \
 
 To fetch the next page, repeat the request with the same filters and `cursor` set to `next_cursor`. When `has_more` is `false`, `next_cursor` is `null`. The cursor points at a position in the list, so checks submitted while you page through do not cause duplicates or gaps.
 
-History responses do not include `raw_output`. Use `GET /api/v1/projects/:project_key/environments/:key/drift` to read the full plan output of the latest check.
+History responses do not include `raw_output` or the unmanaged resource list. Use `GET /api/v1/projects/:project_key/environments/:key/drift` to read the full plan output and the unmanaged resources of the latest check.
+
+For a check that reported an inventory, `GET .../environments/:key/drift` also returns `"unmanaged_resources"`: the rows described under [Unmanaged Resources](#unmanaged-resources), ignored rows included (`ignored`, `ignore_reason`), ordered by id. The list can reveal subscription IDs, resource names and tags, so it follows the plan output rule below: a `read` token gets `"unmanaged_resources_restricted": true` instead. The summary fields `source`, `unmanaged_count` and `unmanaged_ignored_count` are returned to every token, in the history and in the environment responses.
 
 **Error Responses:**
 
-- `400 Bad Request` - Invalid `since`, `until`, `limit` or `cursor`, or a `project` or `environment` that is not a single key
+- `400 Bad Request` - Invalid `since`, `until`, `limit` or `cursor`, a `project` or `environment` that is not a single key, or a `source` that is not one valid value
 - `401 Unauthorized` - Missing or invalid API token
 - `404 Not Found` - Unknown project or environment
 
@@ -261,7 +349,7 @@ A `read` or `read_plans` token that sends any other request (for example `POST .
 { "error": "Forbidden: this API token is read-only" }
 ```
 
-Plan output can contain sensitive values, so only `read_plans` and `write` tokens receive it. For a `read` token, `GET .../environments/:key/drift` still returns the check summary, without `raw_output` and with `"raw_output_restricted": true`.
+Plan output and unmanaged resource lists can contain sensitive values, so only `read_plans` and `write` tokens receive them. For a `read` token, `GET .../environments/:key/drift` still returns the check summary, without `raw_output` and with `"raw_output_restricted": true`.
 
 Tokens created before access levels were introduced keep `write` access.
 
