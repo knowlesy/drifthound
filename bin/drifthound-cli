@@ -3,181 +3,264 @@
 # encoding: utf-8
 
 # drifthound-cli: Run Terraform/Terragrunt/OpenTofu, parse drift, and send to DriftHound API
-require 'json'
-require 'net/http'
-require 'uri'
-
+#
 # Usage: drifthound-cli --tool=terraform --project=my-project --token=XXX --api-url=... [--dir=DIR] [--repository=URL] [--branch=BRANCH]
 # Example: drifthound-cli --tool=terraform --project=my-project --token=XXX --api-url=http://localhost:3000 --dir=infra --repository=https://github.com/org/repo --branch=master
 # Note: Repository URL and branch are auto-detected from git if not provided
-
+#
+# This file is installed on its own (curl, Docker image), so it must stay a
+# single self-contained script that only uses the Ruby standard library.
+require 'json'
+require 'net/http'
+require 'open3'
 require 'optparse'
-opts = {}
+require 'set'
+require 'uri'
 
-OptionParser.new do |o|
-  o.on('--tool=TOOL', 'terraform|terragrunt|opentofu') { |v| opts[:tool] = v }
-  o.on('--project=KEY', 'Project key') { |v| opts[:project] = v }
-  o.on('--environment=ENV', 'Environment key') { |v| opts[:environment] = v }
-  o.on('--environment-name=NAME', 'Environment display name (defaults to the titleized key)') { |v| opts[:environment_name] = v }
-  o.on('--token=TOKEN', 'API token') { |v| opts[:token] = v }
-  o.on('--api-url=URL', 'API base URL') { |v| opts[:api_url] = v }
-  o.on('--dir=DIR', 'Working directory') { |v| opts[:dir] = v }
-  o.on('--repository=URL', 'Repository URL (auto-detected from git if not provided)') { |v| opts[:repository] = v }
-  o.on('--branch=BRANCH', 'Repository branch (auto-detected from git if not provided)') { |v| opts[:branch] = v }
-  o.on('--slack-channel=CHANNEL', 'Slack channel for notifications (e.g., #drift-alerts)') { |v| opts[:slack_channel] = v }
-end.parse!
+module DriftHoundCli
+  # Raised for bad command-line input; main prints the message and exits 1.
+  class UsageError < StandardError; end
 
-
-abort('Missing --tool') unless opts[:tool]
-abort('Missing --project') unless opts[:project]
-abort('Missing --environment') unless opts[:environment]
-abort('Missing --token') unless opts[:token]
-abort('Missing --api-url') unless opts[:api_url]
-
-dir = opts[:dir] || Dir.pwd
-
-# Remove credentials from repository URLs to prevent token leakage
-# Transforms: https://user:token@github.com/org/repo -> https://github.com/org/repo
-def sanitize_repository_url(url)
-  return url if url.nil? || url.empty?
-  url.gsub(%r{://[^@]+@}, '://')
-end
-
-# Auto-detect repository URL from git if not provided
-def detect_git_repository(dir)
-  git_url = `git -C "#{dir}" remote get-url origin 2>/dev/null`.strip
-  return nil if git_url.empty?
-
-  # Convert SSH URLs to HTTPS
-  # git@github.com:org/repo.git -> https://github.com/org/repo
-  # ssh://git@github.com/org/repo.git -> https://github.com/org/repo
-  if git_url =~ /^git@([^:]+):(.+)$/
-    # git@github.com:org/repo.git format
-    host = $1
-    path = $2
-    git_url = "https://#{host}/#{path}"
-  elsif git_url.start_with?('ssh://git@')
-    git_url = git_url.sub('ssh://git@', 'https://')
+  # Every shell-out goes through a runner so tests can replace it.
+  # A runner is callable(cmd_array, chdir: nil) -> [stdout, stderr, status]
+  # where status responds to success? and exitstatus. Commands are arrays, so
+  # no shell is involved.
+  DEFAULT_RUNNER = lambda do |cmd, chdir: nil|
+    if chdir
+      Open3.capture3(*cmd, chdir: chdir)
+    else
+      Open3.capture3(*cmd)
+    end
   end
 
-  # Remove .git suffix and sanitize credentials
-  git_url = git_url.sub(/\.git$/, '')
-  sanitize_repository_url(git_url)
-rescue
-  nil
-end
+  MAX_UNMANAGED_RESOURCES = 5000
 
-# Auto-detect branch from git if not provided
-def detect_git_branch(dir)
-  branch = `git -C "#{dir}" rev-parse --abbrev-ref HEAD 2>/dev/null`.strip
-  return nil if branch.empty? || branch == 'HEAD'
-  branch
-rescue
-  nil
-end
-
-# Auto-detect repository and branch if not provided
-unless opts[:repository]
-  detected_repo = detect_git_repository(dir)
-  if detected_repo
-    opts[:repository] = detected_repo
-    puts "Auto-detected repository: #{detected_repo}"
+  module Text
+    # Command output is untrusted bytes; make it valid UTF-8 before it is sent as JSON
+    def self.clean(text)
+      text.to_s.dup.force_encoding('UTF-8').scrub('?')
+    end
   end
-else
-  # Sanitize manually provided repository URL
-  opts[:repository] = sanitize_repository_url(opts[:repository])
-end
 
-unless opts[:branch]
-  detected_branch = detect_git_branch(dir)
-  if detected_branch
-    opts[:branch] = detected_branch
-    puts "Auto-detected branch: #{detected_branch}"
+  module Unmanaged
+    # Returns [items, dropped_count]
+    def self.truncate(items, max: MAX_UNMANAGED_RESOURCES)
+      return [ items, 0 ] if items.size <= max
+
+      [ items.first(max), items.size - max ]
+    end
+  end
+
+  module Git
+    # Remove credentials from repository URLs to prevent token leakage
+    # Transforms: https://user:token@github.com/org/repo -> https://github.com/org/repo
+    def self.sanitize_repository_url(url)
+      return url if url.nil? || url.empty?
+
+      url.gsub(%r{://[^@]+@}, '://')
+    end
+
+    # Auto-detect repository URL from git if not provided
+    def self.detect_repository(dir, runner)
+      out, _err, status = runner.call([ 'git', '-C', dir, 'remote', 'get-url', 'origin' ])
+      git_url = status.success? ? out.to_s.strip : ''
+      return nil if git_url.empty?
+
+      # Convert SSH URLs to HTTPS
+      # git@github.com:org/repo.git -> https://github.com/org/repo
+      # ssh://git@github.com/org/repo.git -> https://github.com/org/repo
+      if git_url =~ /^git@([^:]+):(.+)$/
+        git_url = "https://#{$1}/#{$2}"
+      elsif git_url.start_with?('ssh://git@')
+        git_url = git_url.sub('ssh://git@', 'https://')
+      end
+
+      # Remove .git suffix and sanitize credentials
+      git_url = git_url.sub(/\.git$/, '')
+      sanitize_repository_url(git_url)
+    rescue StandardError
+      nil
+    end
+
+    # Auto-detect branch from git if not provided
+    def self.detect_branch(dir, runner)
+      out, _err, status = runner.call([ 'git', '-C', dir, 'rev-parse', '--abbrev-ref', 'HEAD' ])
+      branch = status.success? ? out.to_s.strip : ''
+      return nil if branch.empty? || branch == 'HEAD'
+
+      branch
+    rescue StandardError
+      nil
+    end
+
+    # Fills opts[:repository] and opts[:branch] from git when they were not given
+    def self.autodetect!(opts, dir, runner)
+      if opts[:repository]
+        # Sanitize manually provided repository URL
+        opts[:repository] = sanitize_repository_url(opts[:repository])
+      else
+        detected_repo = detect_repository(dir, runner)
+        if detected_repo
+          opts[:repository] = detected_repo
+          puts "Auto-detected repository: #{detected_repo}"
+        end
+      end
+
+      return if opts[:branch]
+
+      detected_branch = detect_branch(dir, runner)
+      return unless detected_branch
+
+      opts[:branch] = detected_branch
+      puts "Auto-detected branch: #{detected_branch}"
+    end
+  end
+
+  module Reporter
+    # Adds the fields every mode shares, sends the report and returns the exit code
+    def self.post(opts, payload)
+      payload = payload.dup
+
+      # Add repository if provided
+      payload[:repository] = opts[:repository] if opts[:repository]
+
+      # Add branch if provided
+      payload[:branch] = opts[:branch] if opts[:branch]
+
+      payload[:environment_name] = opts[:environment_name] if opts[:environment_name]
+
+      # Add notification channel configuration if provided
+      if opts[:slack_channel]
+        payload[:notification_channel] = {
+          channel_type: 'slack',
+          enabled: true,
+          config: {
+            channel: opts[:slack_channel]
+          }
+        }
+      end
+
+      puts 'Building API request...'
+      uri = URI("#{opts[:api_url]}/api/v1/projects/#{opts[:project]}/environments/#{opts[:environment]}/checks")
+      puts "Sending drift report to #{uri}..."
+      $stdout.flush
+
+      begin
+        req = Net::HTTP::Post.new(uri)
+        req['Authorization'] = "Bearer #{opts[:token]}"
+        req['Content-Type'] = 'application/json'
+        req.body = payload.to_json
+
+        res = Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == 'https') { |http| http.request(req) }
+        puts "Response: #{res.code} #{res.body}"
+      rescue StandardError => e
+        puts "Error sending API request: #{e.class} - #{e.message}"
+        return 1
+      end
+
+      res.code.to_i >= 400 ? 1 : 0
+    end
+  end
+
+  module Modes
+    # terraform, terragrunt and opentofu: run a plan and report its drift
+    class Plan
+      def self.add_options(_parser, _opts); end
+
+      def initialize(opts, runner: DEFAULT_RUNNER)
+        @opts = opts
+        @runner = runner
+      end
+
+      def build_payload
+        dir = @opts[:dir] || Dir.pwd
+        cmd = [ @opts[:tool], 'plan', '-no-color', '-detailed-exitcode', '-lock=false' ]
+
+        puts "Running: #{cmd.join(' ')} in #{dir}"
+        start_time = Time.now
+        begin
+          stdout, stderr, run_status = @runner.call(cmd, chdir: dir)
+          output = Text.clean("#{stdout}#{stderr}")
+          exit_code = run_status.exitstatus
+        rescue StandardError => e
+          puts "Error running command: #{e.message}"
+          output = "Error: #{e.message}"
+          exit_code = 1
+        end
+        duration = Time.now - start_time
+        puts output
+        puts "Command exit code: #{exit_code}"
+        $stdout.flush
+
+        # Determine status from -detailed-exitcode
+        # Exit code 0 = no changes, 1 = error, 2 = changes detected (drift)
+        status = case exit_code
+                 when 0 then 'ok'
+                 when 2 then 'drift'
+                 else 'error'
+                 end
+        puts "Determined status: #{status}"
+
+        add_count = output[/ (\d+) to add/, 1]&.to_i || 0
+        change_count = output[/ (\d+) to change/, 1]&.to_i || 0
+        destroy_count = output[/ (\d+) to destroy/, 1]&.to_i || 0
+        puts "Counts - add: #{add_count}, change: #{change_count}, destroy: #{destroy_count}"
+
+        {
+          source: 'terraform',
+          status: status,
+          add_count: add_count,
+          change_count: change_count,
+          destroy_count: destroy_count,
+          duration: duration,
+          raw_output: output,
+          directory: dir
+        }
+      end
+    end
+  end
+
+  # EXTENSION POINT: add the other sources here, for example "argocd"
+  MODES = {
+    'terraform' => Modes::Plan,
+    'terragrunt' => Modes::Plan,
+    'opentofu' => Modes::Plan
+  }.freeze
+
+  def self.build_parser(opts)
+    OptionParser.new do |o|
+      o.on('--tool=TOOL', MODES.keys.join('|')) { |v| opts[:tool] = v }
+      o.on('--project=KEY', 'Project key') { |v| opts[:project] = v }
+      o.on('--environment=ENV', 'Environment key') { |v| opts[:environment] = v }
+      o.on('--environment-name=NAME', 'Environment display name (defaults to the titleized key)') { |v| opts[:environment_name] = v }
+      o.on('--token=TOKEN', 'API token') { |v| opts[:token] = v }
+      o.on('--api-url=URL', 'API base URL') { |v| opts[:api_url] = v }
+      o.on('--dir=DIR', 'Working directory') { |v| opts[:dir] = v }
+      o.on('--repository=URL', 'Repository URL (auto-detected from git if not provided)') { |v| opts[:repository] = v }
+      o.on('--branch=BRANCH', 'Repository branch (auto-detected from git if not provided)') { |v| opts[:branch] = v }
+      o.on('--slack-channel=CHANNEL', 'Slack channel for notifications (e.g., #drift-alerts)') { |v| opts[:slack_channel] = v }
+      MODES.values.uniq.each { |mode| mode.add_options(o, opts) }
+    end
+  end
+
+  # Returns the process exit code
+  def self.main(argv, runner: DEFAULT_RUNNER)
+    opts = {}
+    build_parser(opts).parse!(argv.dup)
+
+    %i[tool project environment token api_url].each do |key|
+      raise UsageError, "Missing --#{key.to_s.tr('_', '-')}" unless opts[key]
+    end
+    mode = MODES[opts[:tool]]
+    raise UsageError, 'Unknown tool' unless mode
+
+    Git.autodetect!(opts, opts[:dir] || Dir.pwd, runner)
+    payload = mode.new(opts, runner: runner).build_payload
+    Reporter.post(opts, payload)
+  rescue UsageError, OptionParser::ParseError => e
+    warn e.message
+    1
   end
 end
 
-cmd = case opts[:tool]
-when 'terraform', 'opentofu' then [ opts[:tool], 'plan', '-no-color', '-detailed-exitcode', '-lock=false' ]
-when 'terragrunt' then [ 'terragrunt', 'plan', '-no-color', '-detailed-exitcode', '-lock=false' ]
-else abort('Unknown tool')
-end
-
-
-puts "Running: #{cmd.join(' ')} in #{dir}"
-start_time = Time.now
-begin
-  output = IO.popen(cmd, chdir: dir, err: [ :child, :out ]) { |io| io.read }
-  output = output.force_encoding('UTF-8').scrub('?')
-  exit_code = $?.exitstatus
-rescue => e
-  puts "Error running command: #{e.message}"
-  output = "Error: #{e.message}"
-  exit_code = 1
-end
-duration = Time.now - start_time
-puts output
-puts "Command exit code: #{exit_code}"
-$stdout.flush
-
-# Determine status from -detailed-exitcode
-# Exit code 0 = no changes, 1 = error, 2 = changes detected (drift)
-status = case exit_code
-when 0 then 'ok'
-when 2 then 'drift'
-else 'error'
-end
-puts "Determined status: #{status}"
-
-add_count = output[/ (\d+) to add/, 1]&.to_i || 0
-change_count = output[/ (\d+) to change/, 1]&.to_i || 0
-destroy_count = output[/ (\d+) to destroy/, 1]&.to_i || 0
-puts "Counts - add: #{add_count}, change: #{change_count}, destroy: #{destroy_count}"
-
-payload = {
-  status: status,
-  add_count: add_count,
-  change_count: change_count,
-  destroy_count: destroy_count,
-  duration: duration,
-  raw_output: output,
-  directory: dir
-}
-
-# Add repository if provided
-payload[:repository] = opts[:repository] if opts[:repository]
-
-# Add branch if provided
-payload[:branch] = opts[:branch] if opts[:branch]
-
-payload[:environment_name] = opts[:environment_name] if opts[:environment_name]
-
-# Add notification channel configuration if provided
-if opts[:slack_channel]
-  payload[:notification_channel] = {
-    channel_type: 'slack',
-    enabled: true,
-    config: {
-      channel: opts[:slack_channel]
-    }
-  }
-end
-
-puts "Building API request..."
-uri = URI("#{opts[:api_url]}/api/v1/projects/#{opts[:project]}/environments/#{opts[:environment]}/checks")
-puts "Sending drift report to #{uri}..."
-$stdout.flush
-
-begin
-  req = Net::HTTP::Post.new(uri)
-  req['Authorization'] = "Bearer #{opts[:token]}"
-  req['Content-Type'] = 'application/json'
-  req.body = payload.to_json
-
-  res = Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == 'https') { |http| http.request(req) }
-  puts "Response: #{res.code} #{res.body}"
-rescue => e
-  puts "Error sending API request: #{e.class} - #{e.message}"
-  exit 1
-end
-
-exit(res.code.to_i >= 400 ? 1 : 0)
+exit DriftHoundCli.main(ARGV) if $PROGRAM_NAME == __FILE__
