@@ -23,6 +23,7 @@ Rails.application.routes.draw do
           member do
             get :drift
           end
+          resources :ignore_rules, only: [ :index, :create, :destroy ], controller: "unmanaged_ignore_rules"
         end
       end
     end
