@@ -103,7 +103,7 @@ curl -X POST \
 
 ### Unmanaged Resources
 
-A check can carry the list of resources that exist in a platform but are not managed by your infrastructure code. The `azure` source uses this to report Azure resources that are missing from Terraform state (see [Azure Unmanaged Resources](azure-unmanaged-resources.md)). Send it as a JSON array under `unmanaged_resources`:
+A check can carry the list of resources that exist in a platform but are not managed by your infrastructure code. The `azure` source uses this to report Azure resources that are missing from Terraform state (see [Azure Unmanaged Resources](azure-unmanaged-resources.md)), and the `argocd` source reports Kubernetes objects that no Argo CD Application owns (see [Argo CD Unowned Resources](argocd-unowned-resources.md)). Send it as a JSON array under `unmanaged_resources`:
 
 ```json
 {
@@ -117,6 +117,25 @@ A check can carry the list of resources that exist in a platform but are not man
       "scope": "rg1",
       "location": "westeurope",
       "metadata": { "subscription_id": "0000", "managed_by": null, "tags": { "owner": "x" } }
+    }
+  ]
+}
+```
+
+For `argocd`, the identifier is `<group|core>/<Kind>/<namespace|_cluster>/<name>`, and `scope` is the namespace (omitted for cluster-scoped objects):
+
+```json
+{
+  "source": "argocd",
+  "status": "ok",
+  "unmanaged_resources": [
+    {
+      "identifier": "apps/Deployment/shop/redis",
+      "resource_type": "Deployment.apps",
+      "name": "redis",
+      "scope": "shop",
+      "location": "prod-aks",
+      "metadata": { "reason": "untracked", "helm_release": "redis", "uid": "0d2f..." }
     }
   ]
 }

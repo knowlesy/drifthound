@@ -32,6 +32,7 @@ Live demo site: https://demo.drifthound.io
 - **Web Dashboard**: View all projects and their drift status at a glance
 - **Role-Based Plan Visibility**: Optionally restrict raw plan output to editors or admins with `PLAN_OUTPUT_MIN_ROLE` (see the [Configuration Guide](docs/configuration.md#plan_output_min_role))
 - **Azure Unmanaged Resources**: Report Azure resources that exist but are not in Terraform state (see [docs/azure-unmanaged-resources.md](docs/azure-unmanaged-resources.md))
+- **Argo CD Unowned Resources**: Report Kubernetes (AKS) objects that no Argo CD Application owns (see [docs/argocd-unowned-resources.md](docs/argocd-unowned-resources.md))
 - **Environment Overview**: See every project for one environment in a single table at `/environments/:key`
 - **Charts Dashboard**: Visual analytics with interactive charts for drift monitoring
 - **Dark Mode**: Switch between light and dark themes from the top nav; follows your OS setting until you choose
@@ -214,6 +215,7 @@ For deployment instructions and configuration options, refer to the Helm chart d
 - **[CLI Guide](docs/cli-usage.md)** - Detailed CLI documentation, Docker usage, and CI/CD integration examples
 - **[API Reference](docs/api-usage.md)** - Complete API documentation, advanced features, and integration examples
 - **[Azure Unmanaged Resources](docs/azure-unmanaged-resources.md)** - Find Azure resources that are missing from Terraform state
+- **[Argo CD Unowned Resources](docs/argocd-unowned-resources.md)** - Find Kubernetes objects that no Argo CD Application owns
 - **[Slack Notifications](docs/slack-notifications.md)** - Configure Slack alerts for drift detection
 
 ## Architecture
