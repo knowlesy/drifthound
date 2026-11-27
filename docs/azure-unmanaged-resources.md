@@ -63,19 +63,19 @@ Examples:
 | `*/providers/Microsoft.Insights/components/*` | `glob` on `identifier` | All Application Insights components |
 | `scratch-*` | `glob` on `name` | Anything named `scratch-...` |
 
-**In the web UI**, open the environment page and expand a check with a list of unmanaged resources. Admins see an **Ignore** button on each row, which adds an exact rule for that identifier. Admins can also add and delete rules in the **Unmanaged resource ignore rules** section. **From the API**, `write` tokens can manage rules; see [API Usage](api-usage.md#ignore-rules).
+**In the web UI**, open the environment page and expand a check with a list of unmanaged resources. Admins see an **Ignore** button on each row, which adds an exact rule for that identifier. Admins can also add and delete rules in the **Unmanaged resource ignore rules** section. Custom rules can contain full resource IDs, so users who may not see plan output see only the number of rules. **From the API**, `write` tokens can manage rules; see [API Usage](api-usage.md#ignore-rules).
 
 **Rules apply from the next check.** Stored checks, their status and the history are never rewritten. Every received row is stored, including ignored ones, with the reason it was ignored (`Built-in: ...` or `Rule #id: ...`), so you can always see what was hidden and why. Deleting a rule makes those resources show up again from the next check. A rule applies to the source it names, or to all sources when none is set.
 
 ## Security
 
 - No Azure credentials and no Terraform state are sent to DriftHound.
-- The unmanaged list reveals subscription IDs, resource names and tags. In the web UI it is shown only to users who may see plan output (`PLAN_OUTPUT_MIN_ROLE`, see [Configuration](configuration.md#plan_output_min_role)); in the API only `read_plans` and `write` tokens receive it. Counts are visible to everyone who can see the environment.
+- The unmanaged list reveals subscription IDs, resource names and tags. In the web UI it is shown only to users who may see plan output (`PLAN_OUTPUT_MIN_ROLE`, see [Configuration](configuration.md#plan_output_min_role)); in the API only `read_plans` and `write` tokens receive it. Custom ignore rules follow the same rule. Counts are visible to everyone who can see the environment.
 - Managing ignore rules in the web UI is admin only.
 
 ## Limits and retention
 
-- At most 5,000 unmanaged resources per check. The CLI sends the first 5,000 in identifier order and says in the check output how many it dropped; the server rejects more than 5,000 with `422`.
+- At most 5,000 unmanaged resources per check. The CLI fails closed if Resource Graph returns fewer rows than its `total_records`. It sends the first 5,000 in identifier order and says in the check output how many it dropped; the server rejects more than 5,000 with `422`.
 - Identifiers are limited to 1,024 characters (longer ones are skipped and counted), and metadata to 2,048 bytes. When a resource's tags would exceed the metadata limit, the CLI drops them and sets `tags_truncated`.
 - The check output lists the first 200 identifiers. The web UI shows up to 1,000 rows per list; use the API for more.
 - Rows are deleted with their check, so they follow `DRIFT_CHECK_RETENTION_DAYS`. See the storage note in [Configuration](configuration.md#data-retention).

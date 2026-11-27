@@ -23,7 +23,7 @@ docker run --rm \
   -v "$(pwd)":/infra \
   -w /infra \
   ghcr.io/drifthoundhq/drifthound:<tag> \
-  bin/drifthound-cli --tool=terraform|terragrunt|opentofu \
+  bin/drifthound-cli --tool=terraform|terragrunt|opentofu|azure \
     --project=PROJECT_KEY \
     --environment=ENV_KEY \
     --token=API_TOKEN \
@@ -38,7 +38,7 @@ This mounts your current directory into the container and runs the CLI as if it 
 ## Basic Usage
 
 ```sh
-drifthound --tool=terraform|terragrunt|opentofu \
+drifthound --tool=terraform|terragrunt|opentofu|azure \
   --project=PROJECT_KEY \
   --environment=ENV_KEY \
   --token=API_TOKEN \

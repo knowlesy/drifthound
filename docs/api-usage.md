@@ -53,7 +53,7 @@ curl -X POST \
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `status` | string | Yes for `terraform` | One of: `ok`, `drift`, `error`, `unknown`. Required when `source` is `terraform`; defaults to `ok` for other sources. A value that is not one of these is rejected with `422` before anything is created. See [Status rules](#status-rules). |
+| `status` | string or integer | Yes for `terraform` | One of: `ok`, `drift`, `error`, `unknown` (the integer values 0 to 3 are still accepted). Required when `source` is `terraform`; defaults to `ok` for other sources. A value that is not one of these is rejected with `422` (message `'bogus' is not a valid status`) before anything is created. See [Status rules](#status-rules). |
 | `source` | string | No | Where the check came from: `terraform` (default), `azure` or `argocd`. Any other value is rejected with `422` and nothing is created. |
 | `unmanaged_resources` | array | No | Resources that exist but are not managed. JSON body only; see [Unmanaged Resources](#unmanaged-resources). |
 | `add_count` | integer | No | Number of resources to add |
@@ -136,7 +136,8 @@ A check can carry the list of resources that exist in a platform but are not man
 - Duplicate identifiers (compared without case) are stored once; the first one wins.
 - Sending the key, even as `[]`, marks the check as one that reported an inventory: `unmanaged_count` and `unmanaged_ignored_count` are set (0 or more). Leaving the key out leaves both `null`.
 - Every valid row is stored. Rows that match an [ignore rule](#ignore-rules) are stored with `ignored: true` and an `ignore_reason`, and are not counted in `unmanaged_count`.
-- Any validation failure returns `422` with `{"error": "..."}` and nothing is created, not even the project or environment.
+- A `source`, `status`, `branch`, `environment_name` or `unmanaged_resources` that fails validation returns `422` with `{"error": "..."}` before anything is written, so no project, environment or check is created. The one exception is unchanged legacy behaviour: a `terraform` check with no `status` is created up to the point where the check itself is validated, so the project and environment can exist after that `422`.
+- Use a JSON body (`Content-Type: application/json`). `unmanaged_resources: null` is treated as if the key were absent (no inventory). Rails drops `null` elements from arrays during parameter parsing, so `[null, {...}]` is read as `[{...}]`. Form-encoded bodies are not supported for this field.
 - The parameter is left out of server logs.
 
 #### Status rules
@@ -157,11 +158,11 @@ Ignore rules hide known, harmless unmanaged resources. A rule belongs to one env
 
 | Endpoint | Token | Description |
 |----------|-------|-------------|
-| `GET /api/v1/projects/:project_key/environments/:environment_key/ignore_rules` | any | The environment's rules and the built-in rules |
+| `GET /api/v1/projects/:project_key/environments/:environment_key/ignore_rules` | any | The built-in rules, and the environment's own rules for tokens that can read plan output (`read_plans`, `write`). A `read` token gets `"ignore_rules_restricted": true` and no `ignore_rules`, because custom patterns can contain full resource IDs. |
 | `POST /api/v1/projects/:project_key/environments/:environment_key/ignore_rules` | `write` | Create a rule |
 | `DELETE /api/v1/projects/:project_key/environments/:environment_key/ignore_rules/:id` | `write` | Delete a rule (`204`) |
 
-`POST` body: `pattern` (required, at most 512 printable characters), `field` (`identifier` by default, or `resource_type`, `name`, `scope`, `location`), `match_type` (`glob` by default, or `exact`), `source` (omit for all sources) and `note` (at most 255 characters). Every value must be a string. An environment can have at most 200 rules, and the same rule cannot be added twice. An invalid rule returns `422`; an unknown project, environment or rule returns `404` (nothing is auto-created).
+`POST` body: `pattern` (required, at most 1024 printable characters, so an identifier of up to 1024 characters can be ignored with an `exact` rule), `field` (`identifier` by default, or `resource_type`, `name`, `scope`, `location`), `match_type` (`glob` by default, or `exact`), `source` (omit for all sources) and `note` (at most 255 characters). Every value must be a string. An environment can have at most 200 rules, and the same rule cannot be added twice. An invalid rule returns `422`; an unknown project, environment or rule returns `404` (nothing is auto-created).
 
 ```json
 {
