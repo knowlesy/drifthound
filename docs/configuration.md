@@ -76,6 +76,35 @@ bin/rails secret
 - Changing this value will invalidate all existing sessions and encrypted data
 - Each environment should use a different secret
 
+## Display Settings
+
+### PROJECT_LABEL
+
+Changes the word DriftHound shows for a project in the web UI. Use it when your teams call the same thing a "Layer", "Stack", "Account" or similar.
+
+**Default:** `Project`
+
+```bash
+PROJECT_LABEL=Layer
+```
+
+### PROJECT_LABEL_PLURAL
+
+The plural form of the label. Optional.
+
+**Default:** `PROJECT_LABEL` pluralized (for example `Layers`)
+
+```bash
+PROJECT_LABEL=Policy
+PROJECT_LABEL_PLURAL=Policies
+```
+
+**What changes:** the dashboard table header, search placeholder, empty state, chart titles and tooltips, the environment overview page, the "Delete" button and dialog on the project page, the notice shown after a project is deleted, and the "Project:" line in Slack and text notifications.
+
+**What never changes:** API paths and JSON fields, CLI flags, URLs and the database. A label is display text only.
+
+**Lower case in sentences:** mid-sentence the label is written in lower case, but only for capitalised words, so `Layer` becomes "layer" while `AWS Account` becomes "AWS account".
+
 ## Access Control
 
 ### PUBLIC_MODE
@@ -203,7 +232,7 @@ When logged in as admin, you can:
 Test or short-lived environments can skew the dashboard charts. An admin can exclude an environment with the **Exclude from Metrics** button on its page, and include it again with **Include in Metrics**. `write` API tokens can set the same flag; see [API Usage](api-usage.md#update-an-environment).
 
 - An excluded environment is left out of every dashboard chart and the stability score.
-- It stays in every list: the dashboard table and status counts, the project page, its own page and the API, with its drift shown as normal.
+- It stays in every list: the dashboard table (both groupings), environment roll-ups and status counts, the project page, its own page and the API, with its drift shown as normal.
 - New checks are still recorded, and notifications are not affected.
 
 Read-only operations (viewing dashboard, projects, environments, drift history) do not require authentication.
@@ -789,6 +818,9 @@ RAILS_ENV=production
 APP_URL=https://drifthound.example.com
 RAILS_LOG_LEVEL=info
 SECRET_KEY_BASE=340b6113695da1baed5d5b7945bff4dc4ab86b75f602c5183624c1b87ffc17d192c18572196456bc3242b13ebf74ab75053c9c87ee2202d2718fbfe85e2ff94a
+
+# Display
+PROJECT_LABEL=Layer
 
 # Access Control (private by default)
 PUBLIC_MODE=false

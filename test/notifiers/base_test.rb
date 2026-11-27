@@ -46,6 +46,15 @@ class Notifiers::BaseTest < ActiveSupport::TestCase
     assert_not_nil @state.metadata["resolved_at"]
   end
 
+  test "build_text_message uses a custom project label" do
+    with_project_label("Layer") do
+      text = Notifiers::Base.build_text_message(@notification)
+
+      assert_includes text, "Layer: Test Project"
+      assert_not_includes text, "Project: Test Project"
+    end
+  end
+
   test "build_text_message creates formatted text notification" do
     text = Notifiers::Base.build_text_message(@notification)
 

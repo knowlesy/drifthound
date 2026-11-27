@@ -32,7 +32,7 @@ class Notifiers::Base
     lines = []
     lines << "#{notification.icon} #{notification.title}"
     lines << ""
-    lines << "Project: #{notification.details[:project]}"
+    lines << "#{ProjectLabel.text}: #{notification.details[:project]}"
     lines << "Environment: #{notification.details[:environment]}"
     lines << "Status: #{notification.details[:status]}"
     lines << "Changes: #{notification.details[:changes]}" if notification.details[:changes]

@@ -89,7 +89,8 @@
   cursor: pointer;
 }
 /* ===== Project/Environment Dashboard Table ===== */
-.projects-table {
+.projects-table,
+.environment-rollup-table {
   display: grid;
   grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr) auto auto;
   column-gap: 2rem;
@@ -155,6 +156,170 @@
 
 .environment-overview-table .col-project a {
   font-weight: 600;
+}
+
+/* ===== Environment-first dashboard table ===== */
+.environment-rollup-table {
+  grid-template-columns: minmax(240px, 1.5fr) minmax(80px, 14rem) auto auto auto auto;
+  column-gap: 1.25rem;
+}
+
+.projects-table[hidden],
+.environment-rollup-table[hidden],
+.env-group-layers[hidden] {
+  display: none;
+}
+
+.env-group,
+.env-group-layers,
+.env-layer-row {
+  display: grid;
+  grid-template-columns: subgrid;
+  grid-column: 1 / -1;
+}
+
+.env-group-row {
+  display: grid;
+  grid-template-columns: subgrid;
+  grid-column: 1 / -1;
+  align-items: center;
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid var(--color-border);
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.env-group-row:hover {
+  background-color: var(--color-hover);
+}
+
+.env-group-row .col-environment {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.env-group-row .env-link {
+  font-weight: 600;
+  flex: 0 1 auto;
+  min-width: 2ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.env-names {
+  flex: 0 100 auto;
+  min-width: 0;
+  white-space: nowrap;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.env-layer-row {
+  align-items: center;
+  padding: 0.75rem 1.5rem;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface-muted);
+}
+
+.env-layer-row .col-project {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding-left: 2rem;
+}
+
+.env-layer-row .col-project a {
+  color: inherit;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.env-layer-row .col-project a {
+  flex: 0 1 auto;
+  min-width: 4ch;
+  white-space: nowrap;
+}
+
+.env-layer-row .col-project .badge {
+  flex-shrink: 0;
+}
+
+.env-group .col-layer-count {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.env-group.expanded .expand-icon {
+  transform: rotate(90deg);
+}
+
+.col-layer-count,
+.col-status-counts,
+.env-group .col-counts {
+  white-space: nowrap;
+}
+
+.col-status-counts {
+  display: inline-flex;
+  gap: 0.4rem;
+}
+
+.rollup-count {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.rollup-count--ok { color: var(--color-ok); }
+.rollup-count--drift { color: var(--color-drift); }
+.rollup-count--error { color: var(--color-error); }
+.rollup-count--unknown { color: var(--color-unknown); }
+
+.detail-filters .group-toggle ~ .view-toggle {
+  margin-left: 0;
+}
+
+@media (max-width: 768px) {
+  .environment-rollup-table {
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: 0.75rem;
+  }
+
+  .environment-rollup-table .project-envs-header,
+  .env-group-row,
+  .env-layer-row {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+
+  .env-layer-row .col-project {
+    padding-left: 1rem;
+  }
+
+  .env-group-row .env-names {
+    display: none;
+  }
+
+  .environment-rollup-table .hide-mobile {
+    display: none;
+  }
+}
+
+.rollup-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1.5rem;
+  margin-top: 0.75rem;
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+}
+
+.rollup-summary .rollup-summary-item {
+  display: inline-flex;
+  gap: 0.75rem;
 }
 
 .project-env-row:last-child {
@@ -316,7 +481,15 @@
   box-sizing: border-box;
 }
 
+/* The full-width .detail-header::before is 100vw wide, which includes the scrollbar.
+   Clip it at the body so it cannot create horizontal scroll. html keeps its own
+   overflow so the body value is not propagated to the viewport. */
+html {
+  overflow: auto;
+}
+
 body {
+  overflow-x: clip;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   background-color: var(--color-bg);
   color: var(--color-text);
@@ -3017,4 +3190,34 @@ h1, h2, h3 {
 .delete-check-form {
   display: inline;
   margin-left: 0.5rem;
+}
+
+/* Keep the dashboard filter bar inside the viewport on phones */
+@media (max-width: 600px) {
+  .detail-filters {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .detail-filters .filter-sep {
+    display: none;
+  }
+
+  .detail-filters .filter-search {
+    flex: 1 1 100%;
+    order: -1;
+  }
+
+  .detail-filters .group-toggle {
+    margin-left: 0;
+  }
+
+  .detail-filters .group-toggle ~ .view-toggle {
+    margin-left: auto;
+  }
+
+  .group-toggle .view-toggle-btn {
+    padding: 0.5rem 0.6rem;
+    font-size: 0.8rem;
+  }
 }

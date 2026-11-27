@@ -2,12 +2,14 @@ import { Controller } from "@hotwired/stimulus"
 
 // Connects to data-controller="dashboard-filter"
 export default class extends Controller {
-  static targets = ["envFilter", "nameFilter", "statusBadge", "clearBtn", "projectRow", "metricsSection", "projectsSection", "viewToggle", "tableFilters", "chartFilters", "chartEnvFilter", "tagBtn", "chartCard", "chartsGrid"];
+  static targets = ["envFilter", "nameFilter", "statusBadge", "clearBtn", "projectRow", "metricsSection", "projectsSection", "viewToggle", "tableFilters", "chartFilters", "chartEnvFilter", "tagBtn", "chartCard", "chartsGrid", "projectTable", "environmentTable", "groupToggle", "envGroup"];
 
   connect() {
     this.activeStatus = '';
     this.activeTag = '';
     this.currentView = localStorage.getItem('dashboardView') || 'table';
+    const storedGrouping = localStorage.getItem('dashboardGrouping');
+    this.currentGrouping = ['project', 'environment'].includes(storedGrouping) ? storedGrouping : 'project';
     this.applyFilters = this.applyFilters.bind(this);
     this.statusBadgeTargets.forEach(badge => {
       badge.addEventListener('click', this.onBadgeClick.bind(this, badge));
@@ -17,6 +19,7 @@ export default class extends Controller {
     if (this.hasClearBtnTarget) this.clearBtnTarget.addEventListener('click', this.clearFilters.bind(this));
     if (this.hasChartEnvFilterTarget) this.chartEnvFilterTarget.addEventListener('change', this.applyChartFilter.bind(this));
     this.applyView();
+    this.applyGrouping();
   }
 
   onBadgeClick(badge) {
@@ -37,6 +40,21 @@ export default class extends Controller {
       const matchesName = !nameValue || project.includes(nameValue) || environment.includes(nameValue);
       const matchesStatus = !this.activeStatus || row.dataset.status === this.activeStatus;
       row.style.display = (matchesEnv && matchesName && matchesStatus) ? '' : 'none';
+    });
+    // Environment-first groups: a group shows when any of its layers matches.
+    // Roll-up numbers are computed on the server and do not change when filtering.
+    this.envGroupTargets.forEach(group => {
+      const groupNameMatch = !nameValue || (group.dataset.search || '').includes(nameValue);
+      let anyVisible = false;
+      group.querySelectorAll('.env-layer-row').forEach(row => {
+        const matchesEnv = !envValue || row.dataset.environment === envValue;
+        const matchesStatus = !this.activeStatus || row.dataset.status === this.activeStatus;
+        const matchesName = !nameValue || groupNameMatch || (row.dataset.project || '').toLowerCase().includes(nameValue);
+        const visible = matchesEnv && matchesStatus && matchesName;
+        row.style.display = visible ? '' : 'none';
+        if (visible) anyVisible = true;
+      });
+      group.style.display = anyVisible ? '' : 'none';
     });
     // Highlight active badge
     this.statusBadgeTargets.forEach(badge => {
@@ -120,6 +138,23 @@ export default class extends Controller {
     this.currentView = view;
     localStorage.setItem('dashboardView', view);
     this.applyView();
+  }
+
+  toggleGrouping(event) {
+    const grouping = event.currentTarget.dataset.group;
+    this.currentGrouping = grouping;
+    localStorage.setItem('dashboardGrouping', grouping);
+    this.applyGrouping();
+  }
+
+  applyGrouping() {
+    this.groupToggleTargets.forEach(btn => {
+      const active = btn.dataset.group === this.currentGrouping;
+      btn.classList.toggle('active', active);
+      btn.setAttribute('aria-pressed', String(active));
+    });
+    if (this.hasProjectTableTarget) this.projectTableTarget.hidden = (this.currentGrouping === 'environment');
+    if (this.hasEnvironmentTableTarget) this.environmentTableTarget.hidden = (this.currentGrouping !== 'environment');
   }
 
   applyView() {

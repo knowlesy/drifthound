@@ -13,6 +13,19 @@ class Environment < ApplicationRecord
     drift_checks.order(created_at: :desc).limit(1).pluck(:status).first || "unknown"
   end
 
+  # Returns { environment_id => newest DriftCheck } for the given environments in a single query.
+  # raw_output is deliberately not loaded.
+  def self.latest_checks_for(environments)
+    ids = environments.map(&:id)
+    return {} if ids.empty?
+
+    DriftCheck
+      .where(environment_id: ids)
+      .select("DISTINCT ON (environment_id) id, environment_id, status, add_count, change_count, destroy_count, created_at")
+      .order(environment_id: :desc, created_at: :desc, id: :desc)
+      .index_by(&:environment_id)
+  end
+
   # Deletes checks created before the given time and returns how many were deleted
   def delete_checks_before(time)
     deleted_count = drift_checks.where(created_at: ...time).destroy_all.size

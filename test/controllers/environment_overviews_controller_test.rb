@@ -112,4 +112,46 @@ class EnvironmentOverviewsControllerTest < ActionDispatch::IntegrationTest
 
     assert_response :success
   end
+
+  test "uses a custom project label in the header and summary" do
+    with_project_label("Layer", "Layers") do
+      get environment_overview_path("overview-prod")
+
+      assert_select ".project-envs-header span", text: "Layer"
+      assert_select ".last-check-time", text: "3 layers"
+    end
+  end
+
+  test "shows the roll-up in the summary" do
+    get environment_overview_path("overview-prod")
+
+    assert_select ".status-pill--error", "ERROR"
+    assert_select ".rollup-summary .rollup-count--ok", "1 OK"
+    assert_select ".rollup-summary .rollup-count--drift", "1 Drift"
+    assert_select ".rollup-summary .rollup-count--error", "1 Error"
+    assert_select ".rollup-summary .rollup-count--unknown", 0
+    assert_select ".rollup-totals", /3 \/ 2 \/ 1/
+  end
+
+  test "roll-up counts a layer without checks as unknown and keeps excluded layers" do
+    empty = Project.create!(name: "storage", key: "storage")
+    empty.environments.create!(name: "Production", key: "overview-prod", exclude_from_metrics: true)
+
+    get environment_overview_path("overview-prod")
+
+    assert_select ".rollup-summary .rollup-count--unknown", "1 Unknown"
+    assert_select ".project-env-row", 4
+    assert_select ".project-env-row .badge-info", "Excluded from metrics"
+    assert_select ".last-check-time", "4 projects"
+  end
+
+  test "shows never in the summary when no layer has been checked" do
+    @network_env.update_columns(last_checked_at: nil)
+    @database_env.update_columns(last_checked_at: nil)
+    @cluster_env.update_columns(last_checked_at: nil)
+
+    get environment_overview_path("overview-prod")
+
+    assert_select ".rollup-last-check", /Never/
+  end
 end
