@@ -103,7 +103,7 @@ The options below apply to `--tool=argocd` only.
 | `--argocd-installation-id` | No | Only count objects whose `argocd.argoproj.io/installation-id` matches. |
 | `--include-secrets` | No     | Also list Secrets (names and types only, never their data). Off by default. |
 | `--include-platform-managed` | No | Also report objects that AKS or Kubernetes manage itself. |
-| `--exclude-kind`  | No       | A kubectl resource name to skip, such as `widgets.example.com`. Repeat it for several. |
+| `--exclude-kind`  | No       | A kubectl resource name to skip, such as `widgets.example.com`. Without a group (`deployments`) it matches every group. Repeat it for several. |
 | `--chunk-size`    | No       | `kubectl get --chunk-size` (default 500). |
 | `--request-timeout` | No     | `kubectl --request-timeout` (default `120s`). |
 | `--concurrency`   | No       | Parallel `kubectl get` calls (default 4, 1 to 16). Use 1 on memory-tight jobs. |

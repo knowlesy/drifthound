@@ -21,9 +21,9 @@ The CLI reports only **roots**: objects that nothing else owns. It checks each o
    - the application name must belong to a known Application, so leftovers of a deleted Application are reported;
    - with `--argocd-installation-id`, the `argocd.argoproj.io/installation-id` annotation must match.
 
-   With `--tracking-method=label`, the label named by `--instance-label-key` must hold the name of a known Application. In annotation modes the label is ignored on purpose: most Helm charts set `app.kubernetes.io/instance` to the release name, which would hide releases installed by hand.
+   With `--tracking-method=label`, the label named by `--instance-label-key` must hold the name of a known Application. If an Application's namespace is not a control plane namespace you listed, Argo CD writes `<namespace>_<name>` in its markers; the CLI also accepts the bare name when only one Application has it. In annotation modes the label is ignored on purpose: most Helm charts set `app.kubernetes.io/instance` to the release name, which would hide releases installed by hand.
 3. **An Application lists it.** An Application that deploys to this cluster lists the object in `status.resources`. This catches objects Argo CD manages but does not mark.
-4. **It is an Application's destination namespace.** Namespaces created with `CreateNamespace=true` are not tracked, so a Namespace equal to an Application's `spec.destination.namespace` counts as owned. A namespace that no Application deploys to is reported, even if it holds Argo CD objects.
+4. **It is an Application's destination namespace.** Namespaces created with `CreateNamespace=true` are not tracked, so a Namespace equal to an Application's `spec.destination.namespace` counts as owned. This is a known limitation: a hand-made namespace with that name is not reported either. A namespace that no Application deploys to is reported, even if it holds Argo CD objects.
 5. **It belongs to the Argo CD control plane.** Everything in the namespaces given by `--argocd-namespace` (default `argocd`), and those namespaces themselves, is skipped. Applications, ApplicationSets and AppProjects in them are still reported, so a hand-made bootstrap Application shows up.
 6. **The platform manages it** (skipped unless `--include-platform-managed`):
    - label `kubernetes.azure.com/managedby=aks`;
@@ -41,7 +41,7 @@ Anything else is reported.
 
 ### Kinds that are not listed
 
-The CLI never lists churn and always-owned kinds: Events, Endpoints, EndpointSlices, Leases, Nodes, ControllerRevisions, APIServices, review kinds, CertificateSigningRequests, flow-control kinds, Kyverno and Cilium reports and identities, CertificateRequests, and the `metrics.k8s.io` groups. Secrets are skipped unless you pass `--include-secrets` (see Security). Add more with `--exclude-kind=<plural>[.<group>]`, the form `kubectl api-resources -o name` prints.
+The CLI never lists churn and always-owned kinds: Events, Endpoints, EndpointSlices, Leases, Nodes, ControllerRevisions, APIServices, review kinds, CertificateSigningRequests, flow-control kinds, Kyverno and Cilium reports and identities, CertificateRequests, and the `metrics.k8s.io` groups. Secrets are skipped unless you pass `--include-secrets` (see Security). Add more with `--exclude-kind=<plural>[.<group>]`, the form `kubectl api-resources -o name` prints. A name without a group, such as `deployments`, skips that resource in every group.
 
 ## Identifier format
 
@@ -73,13 +73,13 @@ The server ignores these by default. They are read-only, apply to the `argocd` s
 | `scheduling.k8s.io/PriorityClass/_cluster/system-*` | Built-in PriorityClasses |
 | `apiextensions.k8s.io/CustomResourceDefinition/_cluster/{applications,applicationsets,appprojects}.argoproj.io` | Argo CD CRDs |
 | `argoproj.io/AppProject/*/default` | Argo CD's default AppProject |
-| `rbac.authorization.k8s.io/{ClusterRole,ClusterRoleBinding}/_cluster/argocd-*` | Argo CD install RBAC (default names) |
-| `gatekeeper-system`, `calico-system`, `tigera-operator`, `app-routing-system` namespaces; `scope = aks-istio-*` | AKS add-on namespaces and their contents |
-| `*.gatekeeper.sh`, `*.projectcalico.org`, `*.tigera.io`, `*.kubernetes.azure.com` CRDs | AKS add-on CRDs |
+| `rbac.authorization.k8s.io/{ClusterRole,ClusterRoleBinding}/_cluster/` `argocd-application-controller`, `argocd-applicationset-controller`, `argocd-server` (exact names) | Argo CD install RBAC |
+| `calico-system`, `tigera-operator`, `app-routing-system` namespaces; `scope = aks-istio-*` | AKS add-on namespaces and their contents |
+| `*.projectcalico.org`, `*.tigera.io`, `*.kubernetes.azure.com` CRDs | AKS add-on CRDs |
 | `templates.gatekeeper.sh/ConstraintTemplate/_cluster/k8sazure*`, `constraints.gatekeeper.sh/*/_cluster/azurepolicy-*` | Azure Policy objects |
-| `StorageClass` `default`, `managed*`, `azurefile*`; `CSIDriver` `*.csi.azure.com` | AKS storage defaults |
+| `StorageClass` named exactly `default`, `managed`, `managed-csi`, `managed-csi-premium`, `managed-premium`, `azurefile`, `azurefile-csi`, `azurefile-csi-premium` or `azurefile-premium` | AKS storage defaults |
 
-Some of the AKS names (the add-on CRD suffixes, the Azure Policy object names, the StorageClass names and the Istio namespace pattern) come from documentation and memory and have not been checked against a live cluster. If a rule hides something it should not, tell the maintainers. A `scope` rule hides the contents of a namespace but not its Namespace object, which is why each system namespace has a second rule. There is deliberately no `scope=default` rule: hand-applied objects in `default` are exactly what this check should find.
+The Argo CD names follow the upstream cluster install manifests and the StorageClass names follow the AKS documentation, but neither list has been checked against a release or a cluster. Some of the AKS names (the add-on CRD suffixes, the Azure Policy object names, the StorageClass names and the Istio namespace pattern) come from documentation and memory and have not been checked against a live cluster. If a rule hides something it should not, tell the maintainers. A `scope` rule hides the contents of a namespace but not its Namespace object, which is why each system namespace has a second rule. Gatekeeper (`gatekeeper-system`, `*.gatekeeper.sh` CRDs) and the Azure CSI drivers (`*.csi.azure.com`) have no built-in rule, because a name pattern alone would also hide hand-made objects with those names. Objects that AKS labels as its own (`kubernetes.azure.com/managedby=aks`) are already skipped by the CLI. If yours are not labelled, add custom rules, for example `scope` exact `gatekeeper-system`, `identifier` exact `core/Namespace/_cluster/gatekeeper-system`, `identifier` glob `apiextensions.k8s.io/CustomResourceDefinition/_cluster/*.gatekeeper.sh` and `identifier` glob `storage.k8s.io/CSIDriver/_cluster/*.csi.azure.com`. There is deliberately no `scope=default` rule: hand-applied objects in `default` are exactly what this check should find.
 
 ## Your own ignore rules
 
@@ -91,7 +91,7 @@ Rules work as described in [Azure Unmanaged Resources](azure-unmanaged-resources
 | `sandbox` | `exact` on `scope` | Every object in the `sandbox` namespace |
 | `*.example.com` | `glob` on `name` | Anything named `...example.com` |
 
-In the web UI, admins get an **Ignore** button on each row (an exact rule on the identifier). Rules apply from the next check; stored checks are never rewritten. Case-only differences in RBAC names (two ClusterRoles that differ only in case) are stored as one row, because the server de-duplicates identifiers without case.
+In the web UI, admins get an **Ignore** button on each row (an exact rule on the identifier). Rules apply from the next check; stored checks are never rewritten. The server de-duplicates identifiers without case, so objects whose identifiers differ only in case (two ClusterRoles named `Admin` and `admin`) are stored as one row. The count the CLI prints can therefore be higher than the stored count.
 
 ## Several Argo CD setups
 
@@ -104,7 +104,7 @@ Applications are always read from all namespaces. If no Application deploys to t
 
 ## Security
 
-- No cluster credentials are sent to DriftHound. The CLI lists objects through a fixed `jsonpath` projection (names, labels used for ownership, a few annotations, and a Secret's type). It never reads `.data`, `.stringData` or whole annotations, so it holds no secret data even though `kubectl apply` stores a copy of each manifest in `last-applied-configuration`.
+- No cluster credentials are sent to DriftHound. The CLI lists objects through a fixed `jsonpath` projection (names, labels used for ownership, a few annotations, and a Secret's type). It never asks for `.data`, `.stringData` or whole annotations, so it does not read Secret data or `last-applied-configuration` (where `kubectl apply` keeps a copy of each manifest). The Argo CD Applications are the exception: they are read in full into the CLI's memory, because their destinations and `status.resources` are needed. They are never printed or sent.
 - Secrets are skipped by default. A client that can list Secrets can read all of them, so grant RBAC without `secrets` unless you need `--include-secrets`. Most Secrets are generated (Helm release storage, service account tokens, certificates), so listing them is mostly noise.
 - Give the CLI a read-only identity.
 - The unowned list reveals namespaces and object names. In the web UI it is shown only to users who may see plan output (`PLAN_OUTPUT_MIN_ROLE`, see [Configuration](configuration.md#plan_output_min_role)); in the API only `read_plans` and `write` tokens receive it.
@@ -133,7 +133,7 @@ rules:
     verbs: ["get", "list"]
 ```
 
-**Option B: hardened (recommended).** RBAC has no deny rules, and `apiGroups: ["*"]` includes the core group, so list the groups and resources explicitly and leave out `secrets`. Add more groups for the CRDs you run; the CLI's forbidden-kinds error names every kind it could not read.
+**Option B: hardened (recommended).** RBAC has no deny rules, and `apiGroups: ["*"]` includes the core group, so list the groups and resources explicitly and leave out `secrets`. **Any API group your cluster serves that is not in the role makes the run fail**, because the CLI refuses to report a partial picture. The error lists the kinds it could not read. Fix it either by adding the group to the role, or by skipping the kind with `--exclude-kind=<resource>` (for example `--exclude-kind=widgets.example.com`). Expect to extend the role for every CRD group you run, and for groups such as `resource.k8s.io` or `snapshot.storage.k8s.io` on newer clusters.
 
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -147,7 +147,7 @@ rules:
   - apiGroups: [apps, batch, networking.k8s.io, policy, autoscaling]
     resources: ["*"]
     verbs: [get, list]
-  - apiGroups: [rbac.authorization.k8s.io, apiextensions.k8s.io, storage.k8s.io, scheduling.k8s.io, admissionregistration.k8s.io]
+  - apiGroups: [rbac.authorization.k8s.io, apiextensions.k8s.io, storage.k8s.io, scheduling.k8s.io, admissionregistration.k8s.io, node.k8s.io]
     resources: ["*"]
     verbs: [get, list]
   - apiGroups: [argoproj.io]
@@ -275,6 +275,12 @@ The pod has no git binary, so repository and branch are not detected; pass `--re
 **"no Argo CD Application deploys to ...".** The context or destination is wrong. The message lists the destinations the Applications use. Pass the matching `--argocd-destination`, or `--context` for the right cluster.
 
 **"this Argo CD may use label tracking".** Nothing in the cluster has a tracking annotation, but objects carry the instance label of known Applications. Argo CD 2.x tracks by label: pass `--tracking-method=label` (and `--instance-label-key` if you changed it).
+
+**"tracking markers name applications that are not in scope".** More than half of the Argo CD tracking markers point at applications the CLI does not know. The usual cause is an Argo CD control plane namespace that is not `argocd`: pass it with `--argocd-namespace`. Other causes are `--argocd-destination` or the context selecting the wrong Applications, or `--argocd-installation-id`. The check fails instead of reporting most of the cluster as unowned.
+
+**Discovery fails for a group other than `metrics.k8s.io`.** Only a partial discovery failure that names nothing but the metrics and events groups is tolerated. Any other failing group, including the core group and groups such as `apps`, fails the check, because kinds of that group would be missing.
+
+**A kind's output cannot be read.** An object with a tab or newline in a printed field breaks that kind's rows. The error names the kind; skip it with `--exclude-kind`.
 
 **Everything is reported.** The tracking method or the installation ID probably does not match Argo CD's settings.
 
