@@ -51,7 +51,7 @@ class Notifiers::Slack < Notifiers::Base
           type: "section",
           text: {
             type: "mrkdwn",
-            text: "*Project:* #{escape_mrkdwn(details[:project])}   *Environment:* #{escape_mrkdwn(details[:environment])}"
+            text: "*#{escape_mrkdwn(ProjectLabel.text)}:* #{escape_mrkdwn(details[:project])}   *Environment:* #{escape_mrkdwn(details[:environment])}"
           }
         }
       ]
@@ -110,7 +110,7 @@ class Notifiers::Slack < Notifiers::Base
           type: "section",
           text: {
             type: "mrkdwn",
-            text: "*Project:* #{escape_mrkdwn(details[:project])}   *Environment:* #{escape_mrkdwn(details[:environment])}"
+            text: "*#{escape_mrkdwn(ProjectLabel.text)}:* #{escape_mrkdwn(details[:project])}   *Environment:* #{escape_mrkdwn(details[:environment])}"
           }
         },
         {

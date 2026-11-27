@@ -99,7 +99,7 @@ PROJECT_LABEL=Policy
 PROJECT_LABEL_PLURAL=Policies
 ```
 
-**What changes:** the dashboard table header, search placeholder, empty state, chart titles and tooltips, the environment overview page, the "Delete" button and dialog on the project page, and the notice shown after a project is deleted.
+**What changes:** the dashboard table header, search placeholder, empty state, chart titles and tooltips, the environment overview page, the "Delete" button and dialog on the project page, the notice shown after a project is deleted, and the "Project:" line in Slack and text notifications.
 
 **What never changes:** API paths and JSON fields, CLI flags, URLs and the database. A label is display text only.
 
