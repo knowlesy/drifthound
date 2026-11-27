@@ -10,10 +10,28 @@
     <div class="summary-top">
       <div class="main-info">
         <h1 title="<%= @key %>"><%= @key %></h1>
+        <span class="status-pill status-pill--<%= @rollup.worst_status %>"><%= @rollup.worst_status.upcase %></span>
       </div>
       <div>
-        <span class="last-check-time"><%= project_label_count(@environments.size) %></span>
+        <span class="last-check-time"><%= project_label_count(@rollup.layers.size) %></span>
       </div>
+    </div>
+    <div class="rollup-summary">
+      <span class="rollup-summary-item" title="<%= project_label(plural: true) %> by status">
+        <% @rollup.status_counts.each do |status, count| %>
+          <% next if status == "unknown" && count.zero? %>
+          <span class="rollup-count rollup-count--<%= status %>" data-status="<%= status %>"><%= count %> <%= status == "ok" ? "OK" : status.capitalize %></span>
+        <% end %>
+      </span>
+      <span class="rollup-summary-item rollup-totals">Add / Change / Destroy: <%= @rollup.add_total %> / <%= @rollup.change_total %> / <%= @rollup.destroy_total %></span>
+      <span class="rollup-summary-item rollup-last-check">
+        Last check:
+        <% if @rollup.last_checked_at %>
+          <%= time_ago_in_words(@rollup.last_checked_at) %> ago
+        <% else %>
+          Never
+        <% end %>
+      </span>
     </div>
   </section>
 
@@ -26,28 +44,34 @@
         <span>Add / Change / Destroy</span>
         <span style="text-align:right;">Last Check</span>
       </div>
-      <% @environments.each do |environment| %>
-        <% check = @latest_checks[environment.id] %>
-        <% status = check&.status || "unknown" %>
-        <div class="project-env-row project-row--<%= environment.status %>">
-          <span class="col-project" title="<%= environment.project.name %>">
-            <%= link_to environment.project.name, project_environment_path(environment.project.key, environment.key) %>
+      <% @rollup.layers.each do |layer| %>
+        <% environment = layer.environment %>
+        <% check = layer.latest_check %>
+        <% status = layer.status %>
+        <div class="project-env-row project-row--<%= status %>">
+          <span class="col-project" title="<%= layer.project.name %>">
+            <%= link_to layer.project.name, project_environment_path(layer.project.key, environment.key) %>
           </span>
-          <span class="col-environment" title="<%= environment.name %>"><%= environment.name %></span>
+          <span class="col-environment" title="<%= environment.name %>">
+            <%= environment.name %>
+            <% if layer.excluded? %>
+              <span class="badge badge-info" title="Left out of the dashboard charts and stability score">Excluded from metrics</span>
+            <% end %>
+          </span>
           <span class="col-status">
             <span class="status-indicator status-indicator--<%= status %>"></span>
             <span class="status-text status-text--<%= status %>"><%= status.upcase %></span>
           </span>
           <span class="col-counts">
             <% if check %>
-              <%= check.add_count.to_i %> / <%= check.change_count.to_i %> / <%= check.destroy_count.to_i %>
+              <%= layer.add_count %> / <%= layer.change_count %> / <%= layer.destroy_count %>
             <% else %>
               —
             <% end %>
           </span>
           <span class="col-time" style="text-align:right;">
-            <% if environment.last_checked_at %>
-              <%= time_ago_in_words(environment.last_checked_at) %> ago
+            <% if layer.last_checked_at %>
+              <%= time_ago_in_words(layer.last_checked_at) %> ago
             <% else %>
               Never
             <% end %>

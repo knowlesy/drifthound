@@ -7,7 +7,7 @@ class EnvironmentOverviewsController < ApplicationController
     raise ActiveRecord::RecordNotFound if @environments.empty?
 
     @key = params[:key]
-    @latest_checks = Environment.latest_checks_for(@environments)
+    @rollup = EnvironmentRollup.build(@environments.map { [ it.project, it ] }).first
   end
 
   private
