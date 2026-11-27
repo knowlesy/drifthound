@@ -135,6 +135,9 @@ Open Grafana at http://localhost:3001 (anonymous viewer, DriftHound dashboard) o
 | `dev/grafana/dashboards/drifthound.json` | The DriftHound dashboard |
 
 > [!NOTE]
+> `make docker-setup` and `make docker-setup-demo` reseed the database and delete all API tokens, so the scrape returns 401 until you run `make docker-monitoring-start` again.
+
+> [!NOTE]
 > This change adds the `prometheus-client` gem. If you already have a local image, run `docker compose build app` after pulling, or `make docker-start` fails with a missing gem error. `make docker-monitoring-start` builds the image itself.
 
 
