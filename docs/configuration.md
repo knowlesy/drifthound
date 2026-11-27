@@ -232,7 +232,7 @@ When logged in as admin, you can:
 Test or short-lived environments can skew the dashboard charts. An admin can exclude an environment with the **Exclude from Metrics** button on its page, and include it again with **Include in Metrics**. `write` API tokens can set the same flag; see [API Usage](api-usage.md#update-an-environment).
 
 - An excluded environment is left out of every dashboard chart and the stability score.
-- It stays in every list: the dashboard table and status counts, the project page, its own page and the API, with its drift shown as normal.
+- It stays in every list: the dashboard table (both groupings), environment roll-ups and status counts, the project page, its own page and the API, with its drift shown as normal.
 - New checks are still recorded, and notifications are not affected.
 
 Read-only operations (viewing dashboard, projects, environments, drift history) do not require authentication.
