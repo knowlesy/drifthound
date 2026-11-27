@@ -15,7 +15,7 @@ class EnvironmentOverviewsController < ApplicationController
   def latest_checks_by_environment(environments)
     DriftCheck
       .where(environment_id: environments.map(&:id))
-      .select("DISTINCT ON (environment_id) id, environment_id, status, add_count, change_count, destroy_count, created_at")
+      .select("DISTINCT ON (environment_id) id, environment_id, status, add_count, change_count, destroy_count, unmanaged_count, source, created_at")
       .order(:environment_id, created_at: :desc)
       .index_by(&:environment_id)
   end
