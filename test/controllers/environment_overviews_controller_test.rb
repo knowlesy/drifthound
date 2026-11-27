@@ -112,4 +112,13 @@ class EnvironmentOverviewsControllerTest < ActionDispatch::IntegrationTest
 
     assert_response :success
   end
+
+  test "uses a custom project label in the header and summary" do
+    with_project_label("Layer", "Layers") do
+      get environment_overview_path("overview-prod")
+
+      assert_select ".project-envs-header span", text: "Layer"
+      assert_select ".last-check-time", text: "3 layers"
+    end
+  end
 end

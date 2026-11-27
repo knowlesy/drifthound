@@ -34,7 +34,7 @@
       <% end %>
       <span class="filter-search">
         <span class="filter-icon">🔍</span>
-        <input id="name-filter" type="text" placeholder="Search projects or environments…" class="filter-input" data-dashboard-filter-target="nameFilter">
+        <input id="name-filter" type="text" placeholder="Search <%= project_label(plural: true, lowercase: true) %> or environments…" class="filter-input" data-dashboard-filter-target="nameFilter">
         <button id="clear-filters" class="filter-clear" title="Clear filters" style="display:none;" data-dashboard-filter-target="clearBtn">✕</button>
       </span>
       <span class="filter-sep"></span>
@@ -157,7 +157,7 @@
       <div class="chart-card" data-chart-id="environment-health" data-tags="status" data-action="click->chart-modal#open" data-dashboard-filter-target="chartCard">
         <div class="chart-card-header">
           <h3>Health by Environment
-            <span class="chart-info" data-tooltip="Status breakdown by environment type (e.g., production, staging). Compare the health of different environment tiers across all projects.">
+            <span class="chart-info" data-tooltip="Status breakdown by environment type (e.g., production, staging). Compare the health of different environment tiers across all <%= project_label(plural: true, lowercase: true) %>.">
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
             </span>
           </h3>
@@ -241,8 +241,8 @@
 
       <div class="chart-card" data-chart-id="checks-per-project" data-tags="volume" data-action="click->chart-modal#open" data-dashboard-filter-target="chartCard">
         <div class="chart-card-header">
-          <h3>Checks per Project
-            <span class="chart-info" data-tooltip="Number of drift checks executed per project over the last 30 days, broken down by result status. Identifies which projects are most actively monitored.">
+          <h3>Checks per <%= project_label %>
+            <span class="chart-info" data-tooltip="Number of drift checks executed per <%= project_label(lowercase: true) %> over the last 30 days, broken down by result status. Identifies which <%= project_label(plural: true, lowercase: true) %> are most actively monitored.">
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
             </span>
           </h3>
@@ -258,8 +258,8 @@
       <!-- Row 6: Top Drifting Projects + Check Duration (Performance) -->
       <div class="chart-card" data-chart-id="top-drifting" data-tags="volume" data-action="click->chart-modal#open" data-dashboard-filter-target="chartCard">
         <div class="chart-card-header">
-          <h3>Top Drifting Projects
-            <span class="chart-info" data-tooltip="Projects with the highest drift rate over the last 30 days. Identifies which projects need the most attention for drift remediation.">
+          <h3>Top Drifting <%= project_label(plural: true) %>
+            <span class="chart-info" data-tooltip="<%= project_label(plural: true) %> with the highest drift rate over the last 30 days. Identifies which <%= project_label(plural: true, lowercase: true) %> need the most attention for drift remediation.">
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
             </span>
           </h3>
@@ -309,13 +309,13 @@
   <section class="projects-list" data-dashboard-filter-target="projectsSection">
     <% if @project_environments.empty? %>
       <div class="empty-state">
-        <p>No projects or environments yet.</p>
-        <p class="hint">Projects and environments are created automatically when you submit your first drift check via the API.</p>
+        <p>No <%= project_label(plural: true, lowercase: true) %> or environments yet.</p>
+        <p class="hint"><%= project_label(plural: true) %> and environments are created automatically when you submit your first drift check via the API.</p>
       </div>
     <% else %>
       <div class="projects-table" id="projects-table">
         <div class="project-envs-header">
-          <span>Project</span>
+          <span><%= project_label %></span>
           <span>Environment</span>
           <span>Status</span>
           <span style="text-align:right;">Last Check</span>

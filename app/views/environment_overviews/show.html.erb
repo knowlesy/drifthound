@@ -12,7 +12,7 @@
         <h1 title="<%= @key %>"><%= @key %></h1>
       </div>
       <div>
-        <span class="last-check-time"><%= pluralize(@environments.size, "project") %></span>
+        <span class="last-check-time"><%= project_label_count(@environments.size) %></span>
       </div>
     </div>
   </section>
@@ -20,7 +20,7 @@
   <section class="projects-list">
     <div class="projects-table environment-overview-table">
       <div class="project-envs-header">
-        <span>Project</span>
+        <span><%= project_label %></span>
         <span>Environment</span>
         <span>Status</span>
         <span>Add / Change / Destroy</span>

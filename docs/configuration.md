@@ -76,6 +76,35 @@ bin/rails secret
 - Changing this value will invalidate all existing sessions and encrypted data
 - Each environment should use a different secret
 
+## Display Settings
+
+### PROJECT_LABEL
+
+Changes the word DriftHound shows for a project in the web UI. Use it when your teams call the same thing a "Layer", "Stack", "Account" or similar.
+
+**Default:** `Project`
+
+```bash
+PROJECT_LABEL=Layer
+```
+
+### PROJECT_LABEL_PLURAL
+
+The plural form of the label. Optional.
+
+**Default:** `PROJECT_LABEL` pluralized (for example `Layers`)
+
+```bash
+PROJECT_LABEL=Policy
+PROJECT_LABEL_PLURAL=Policies
+```
+
+**What changes:** the dashboard table header, search placeholder, empty state, chart titles and tooltips, the environment overview page, the "Delete" button and dialog on the project page, and the notice shown after a project is deleted.
+
+**What never changes:** API paths and JSON fields, CLI flags, URLs and the database. A label is display text only.
+
+**Lower case in sentences:** mid-sentence the label is written in lower case, but only for capitalised words, so `Layer` becomes "layer" while `AWS Account` becomes "AWS account".
+
 ## Access Control
 
 ### PUBLIC_MODE
@@ -661,6 +690,9 @@ RAILS_ENV=production
 APP_URL=https://drifthound.example.com
 RAILS_LOG_LEVEL=info
 SECRET_KEY_BASE=340b6113695da1baed5d5b7945bff4dc4ab86b75f602c5183624c1b87ffc17d192c18572196456bc3242b13ebf74ab75053c9c87ee2202d2718fbfe85e2ff94a
+
+# Display
+PROJECT_LABEL=Layer
 
 # Access Control (private by default)
 PUBLIC_MODE=false
