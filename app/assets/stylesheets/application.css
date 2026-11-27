@@ -160,7 +160,8 @@
 
 /* ===== Environment-first dashboard table ===== */
 .environment-rollup-table {
-  grid-template-columns: minmax(160px, 1.5fr) auto auto auto auto auto;
+  grid-template-columns: minmax(240px, 1.5fr) minmax(80px, 14rem) auto auto auto auto;
+  column-gap: 1.25rem;
 }
 
 .projects-table[hidden],
@@ -200,11 +201,16 @@
 
 .env-group-row .env-link {
   font-weight: 600;
+  flex: 0 1 auto;
+  min-width: 2ch;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .env-names {
+  flex: 0 100 auto;
+  min-width: 0;
+  white-space: nowrap;
   color: var(--color-text-muted);
   font-size: 0.8rem;
   overflow: hidden;
@@ -219,11 +225,31 @@
 }
 
 .env-layer-row .col-project {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
   padding-left: 2rem;
 }
 
 .env-layer-row .col-project a {
   color: inherit;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.env-layer-row .col-project a {
+  flex: 0 1 auto;
+  min-width: 4ch;
+  white-space: nowrap;
+}
+
+.env-layer-row .col-project .badge {
+  flex-shrink: 0;
+}
+
+.env-group .col-layer-count {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .env-group.expanded .expand-icon {
@@ -257,7 +283,23 @@
 
 @media (max-width: 768px) {
   .environment-rollup-table {
-    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: 0.75rem;
+  }
+
+  .environment-rollup-table .project-envs-header,
+  .env-group-row,
+  .env-layer-row {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+
+  .env-layer-row .col-project {
+    padding-left: 1rem;
+  }
+
+  .env-group-row .env-names {
+    display: none;
   }
 
   .environment-rollup-table .hide-mobile {
@@ -3140,4 +3182,34 @@ h1, h2, h3 {
 .delete-check-form {
   display: inline;
   margin-left: 0.5rem;
+}
+
+/* Keep the dashboard filter bar inside the viewport on phones */
+@media (max-width: 600px) {
+  .detail-filters {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .detail-filters .filter-sep {
+    display: none;
+  }
+
+  .detail-filters .filter-search {
+    flex: 1 1 100%;
+    order: -1;
+  }
+
+  .detail-filters .group-toggle {
+    margin-left: 0;
+  }
+
+  .detail-filters .group-toggle ~ .view-toggle {
+    margin-left: auto;
+  }
+
+  .group-toggle .view-toggle-btn {
+    padding: 0.5rem 0.6rem;
+    font-size: 0.8rem;
+  }
 }

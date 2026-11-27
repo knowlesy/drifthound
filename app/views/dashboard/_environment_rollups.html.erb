@@ -7,7 +7,7 @@
 <div class="environment-rollup-table" id="environments-table" data-dashboard-filter-target="environmentTable" hidden>
   <div class="project-envs-header">
     <span>Environment</span>
-    <span><%= project_label(plural: true) %></span>
+    <span class="hide-mobile"><%= project_label(plural: true) %></span>
     <span>Status</span>
     <span class="hide-mobile">OK / Drift / Error</span>
     <span class="hide-mobile">Add / Change / Destroy</span>
@@ -27,7 +27,7 @@
             <span class="env-names"><%= rollup.names.join(", ") %></span>
           <% end %>
         </span>
-        <span class="col-layer-count"><%= project_label_count(rollup.layers.size) %></span>
+        <span class="col-layer-count hide-mobile"><%= project_label_count(rollup.layers.size) %></span>
         <span class="col-status">
           <span class="status-indicator status-indicator--<%= worst %>"></span>
           <span class="status-text status-text--<%= worst %>"><%= worst.upcase %></span>
@@ -50,15 +50,16 @@
       <div class="env-group-layers" id="env-group-<%= index %>-layers" data-expandable-target="content" hidden>
         <% rollup.layers.each do |layer| %>
           <%= tag.div class: "env-layer-row", data: { environment: layer.environment.name, status: layer.status, project: layer.project.name } do %>
-            <span class="col-project" title="<%= layer.project.name %>">
+            <span class="col-project" title="<%= layer.project.name %> (<%= layer.environment.name %>)">
               <%= link_to layer.project.name, project_environment_path(layer.project.key, layer.environment.key), data: { expandable_ignore: true } %>
-            </span>
-            <span class="col-environment" title="<%= layer.environment.name %>">
-              <%= layer.environment.name %>
+              <% unless layer.environment.name == rollup.display_name %>
+                <span class="env-names"><%= layer.environment.name %></span>
+              <% end %>
               <% if layer.excluded? %>
                 <span class="badge badge-info" title="Left out of the dashboard charts and stability score">Excluded from metrics</span>
               <% end %>
             </span>
+            <span class="hide-mobile"></span>
             <span class="col-status">
               <span class="status-indicator status-indicator--<%= layer.status %>"></span>
               <span class="status-text status-text--<%= layer.status %>"><%= layer.status.upcase %></span>

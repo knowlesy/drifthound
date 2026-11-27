@@ -22,6 +22,10 @@ class EnvironmentFirstViewTest < ApplicationSystemTestCase
     Rails.application.config.public_mode = false
   end
 
+  def resize_to(width)
+    page.driver.browser.manage.window.resize_to(width, 900)
+  end
+
   def switch_to_environments
     visit root_path
     find("[data-group='environment']").click
@@ -84,5 +88,35 @@ class EnvironmentFirstViewTest < ApplicationSystemTestCase
 
     assert_selector ".env-group[data-environment-key='layer-prod']"
     assert_no_selector ".env-group[data-environment-key='layer-stage']"
+  end
+
+  test "expand button label follows the expanded state" do
+    switch_to_environments
+    within(".env-group[data-environment-key='layer-prod']") do
+      assert_selector ".expand-btn[aria-label^='Show']"
+      find(".expand-btn").click
+      assert_selector ".expand-btn[aria-label^='Hide']"
+      find(".expand-btn").click
+      assert_selector ".expand-btn[aria-label^='Show']"
+    end
+  end
+
+  test "no horizontal overflow on phones in either grouping" do
+    [ 360, 390, 480, 600 ].each do |width|
+      resize_to(width)
+      visit root_path
+      assert_selector ".projects-table"
+      assert page.evaluate_script("document.documentElement.scrollWidth <= window.innerWidth"), "project-first overflows at #{width}px"
+
+      find("[data-group='environment']").click
+      assert_selector ".environment-rollup-table"
+      find(".env-group[data-environment-key='layer-prod'] .expand-btn").click
+      assert_selector ".env-layer-row", count: 2
+      assert page.evaluate_script("document.documentElement.scrollWidth <= window.innerWidth"), "env-first overflows at #{width}px"
+
+      page.execute_script("localStorage.removeItem('dashboardGrouping')")
+    end
+  ensure
+    resize_to(1400)
   end
 end
