@@ -207,4 +207,46 @@ class EnvironmentTest < ActiveSupport::TestCase
     assert_includes Environment.included_in_metrics, included
     assert_not_includes Environment.included_in_metrics, excluded
   end
+
+  test "latest_checks_for returns the newest check per environment" do
+    first = @project.environments.create!(name: "Production", key: "production")
+    second = @project.environments.create!(name: "Staging", key: "staging")
+    first.drift_checks.create!(status: :ok, created_at: 2.hours.ago)
+    newest = first.drift_checks.create!(status: :drift, add_count: 1, created_at: 1.hour.ago)
+
+    result = Environment.latest_checks_for([ first, second ])
+
+    assert_equal [ first.id ], result.keys
+    assert_equal newest.id, result[first.id].id
+  end
+
+  test "latest_checks_for breaks created_at ties by highest id" do
+    env = @project.environments.create!(name: "Production", key: "production")
+    older = env.drift_checks.create!(status: :ok)
+    newer = env.drift_checks.create!(status: :drift)
+    time = 1.hour.ago
+    DriftCheck.where(id: [ older.id, newer.id ]).update_all(created_at: time)
+
+    assert_equal newer.id, Environment.latest_checks_for([ env ])[env.id].id
+  end
+
+  test "latest_checks_for does not load raw_output" do
+    env = @project.environments.create!(name: "Production", key: "production")
+    env.drift_checks.create!(status: :ok, raw_output: "big plan")
+
+    check = Environment.latest_checks_for([ env ])[env.id]
+
+    assert_not check.has_attribute?(:raw_output)
+  end
+
+  test "latest_checks_for runs a single query" do
+    env = @project.environments.create!(name: "Production", key: "production")
+    env.drift_checks.create!(status: :ok)
+
+    assert_queries_count(1) { Environment.latest_checks_for([ env ]) }
+  end
+
+  test "latest_checks_for returns an empty hash without querying when there are no environments" do
+    assert_no_queries { assert_equal({}, Environment.latest_checks_for([])) }
+  end
 end

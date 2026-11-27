@@ -1,0 +1,90 @@
+<%#
+  Environment-first table: one expandable row per environment key, rolled up across projects.
+
+  Local variables:
+  - rollups: array of EnvironmentRollup
+%>
+<% display_name_counts = rollups.map(&:display_name).tally %>
+<div class="environment-rollup-table" id="environments-table" data-dashboard-filter-target="environmentTable" hidden>
+  <div class="project-envs-header">
+    <span>Environment</span>
+    <span class="hide-mobile"><%= project_label(plural: true) %></span>
+    <span>Status</span>
+    <span class="hide-mobile">OK / Drift / Error</span>
+    <span class="hide-mobile">Add / Change / Destroy</span>
+    <span class="hide-mobile" style="text-align:right;">Last Check</span>
+  </div>
+  <% rollups.each_with_index do |rollup, index| %>
+    <% worst = rollup.worst_status %>
+    <% counts = rollup.status_counts %>
+    <%= tag.div class: "env-group", data: { controller: "expandable", dashboard_filter_target: "envGroup", environment_key: rollup.key, search: rollup.search_text } do %>
+      <div class="env-group-row project-row--<%= worst %>" data-action="click->expandable#toggle">
+        <span class="col-environment" title="<%= rollup.key %>">
+          <button type="button" class="expand-btn" data-expandable-target="button" aria-expanded="false" aria-controls="env-group-<%= index %>-layers" aria-label="Show <%= project_label(plural: true, lowercase: true) %> for <%= rollup.display_name %>">
+            <span class="expand-icon">▶</span>
+          </button>
+          <%= link_to rollup.display_name, environment_overview_path(rollup.key), class: "env-link", data: { expandable_ignore: true } %>
+          <% if !rollup.names.one? %>
+            <span class="env-names"><%= rollup.names.join(", ") %></span>
+          <% elsif display_name_counts[rollup.display_name] > 1 %>
+            <span class="env-names"><%= rollup.key %></span>
+          <% end %>
+        </span>
+        <span class="col-layer-count hide-mobile"><%= project_label_count(rollup.layers.size) %></span>
+        <span class="col-status">
+          <span class="status-indicator status-indicator--<%= worst %>"></span>
+          <span class="status-text status-text--<%= worst %>"><%= worst.upcase %></span>
+        </span>
+        <span class="col-status-counts hide-mobile">
+          <% EnvironmentRollup::STATUSES.each do |status| %>
+            <% next if status == "unknown" && counts[status].zero? %>
+            <%= tag.span counts[status], class: "rollup-count rollup-count--#{status}", data: { status: status }, title: "#{counts[status]} #{status == 'ok' ? 'OK' : status.capitalize}" %>
+          <% end %>
+        </span>
+        <span class="col-counts hide-mobile"><%= rollup.add_total %> / <%= rollup.change_total %> / <%= rollup.destroy_total %></span>
+        <span class="col-time hide-mobile" style="text-align:right;">
+          <% if rollup.last_checked_at %>
+            <%= time_ago_in_words(rollup.last_checked_at) %> ago
+          <% else %>
+            Never
+          <% end %>
+        </span>
+      </div>
+      <div class="env-group-layers" id="env-group-<%= index %>-layers" data-expandable-target="content" hidden>
+        <% rollup.layers.each do |layer| %>
+          <%= tag.div class: "env-layer-row", data: { environment: layer.environment.name, status: layer.status, project: layer.project.name } do %>
+            <span class="col-project" title="<%= layer.project.name %> (<%= layer.environment.name %>)">
+              <%= link_to layer.project.name, project_environment_path(layer.project.key, layer.environment.key), data: { expandable_ignore: true } %>
+              <% unless layer.environment.name == rollup.display_name %>
+                <span class="env-names"><%= layer.environment.name %></span>
+              <% end %>
+              <% if layer.excluded? %>
+                <span class="badge badge-info" title="Left out of the dashboard charts and stability score">Excluded from metrics</span>
+              <% end %>
+            </span>
+            <span class="hide-mobile"></span>
+            <span class="col-status">
+              <span class="status-indicator status-indicator--<%= layer.status %>"></span>
+              <span class="status-text status-text--<%= layer.status %>"><%= layer.status.upcase %></span>
+            </span>
+            <span class="hide-mobile"></span>
+            <span class="col-counts hide-mobile">
+              <% if layer.latest_check %>
+                <%= layer.add_count %> / <%= layer.change_count %> / <%= layer.destroy_count %>
+              <% else %>
+                —
+              <% end %>
+            </span>
+            <span class="col-time hide-mobile" style="text-align:right;">
+              <% if layer.last_checked_at %>
+                <%= time_ago_in_words(layer.last_checked_at) %> ago
+              <% else %>
+                Never
+              <% end %>
+            </span>
+          <% end %>
+        <% end %>
+      </div>
+    <% end %>
+  <% end %>
+</div>

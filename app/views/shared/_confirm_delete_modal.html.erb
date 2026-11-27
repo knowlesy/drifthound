@@ -7,12 +7,13 @@
   - delete_path: Path to send the DELETE request to
   - cascade_warning: Optional additional warning about cascading deletes
 %>
+<% label = local_assigns[:resource_label] || (resource_type == "project" ? project_label : resource_type.capitalize) %>
 
 <dialog class="confirm-modal" data-modal-target="dialog" data-action="click->modal#closeOnBackdrop">
   <div class="confirm-modal-content">
     <div class="confirm-modal-header">
       <span class="confirm-modal-icon">&#9888;</span>
-      <h2>Delete <%= resource_type.capitalize %>?</h2>
+      <h2>Delete <%= label %>?</h2>
     </div>
 
     <div class="confirm-modal-body">
@@ -25,7 +26,7 @@
 
     <div class="confirm-modal-actions">
       <button type="button" class="btn btn-secondary" data-action="click->modal#close">Cancel</button>
-      <%= button_to "Delete #{resource_type.capitalize}", delete_path, method: :delete, class: "btn btn-danger" %>
+      <%= button_to "Delete #{label}", delete_path, method: :delete, class: "btn btn-danger" %>
     </div>
   </div>
 </dialog>

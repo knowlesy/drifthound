@@ -326,4 +326,33 @@ class DashboardControllerTest < ActionDispatch::IntegrationTest
     assert_equal 1, score["total"]
     assert_not_includes score["by_environment"].keys, "Sandbox"
   end
+
+  test "dashboard uses the default Project label" do
+    get root_path
+
+    assert_select ".project-envs-header span", text: "Project"
+    assert_select "#name-filter[placeholder=?]", "Search projects or environments…"
+  end
+
+  test "dashboard uses a custom project label" do
+    with_project_label("Layer", "Layers") do
+      get root_path
+
+      assert_select ".project-envs-header span", text: "Layer"
+      assert_select "#name-filter[placeholder=?]", "Search layers or environments…"
+      assert_select ".chart-card h3", text: /Checks per Layer/
+      assert_select ".chart-card h3", text: /Top Drifting Layers/
+      assert_select ".chart-card h3", text: /Checks per Project/, count: 0
+    end
+  end
+
+  test "empty dashboard uses a custom project label" do
+    Project.destroy_all
+
+    with_project_label("Layer", "Layers") do
+      get root_path
+
+      assert_select ".empty-state p", text: "No layers or environments yet."
+    end
+  end
 end

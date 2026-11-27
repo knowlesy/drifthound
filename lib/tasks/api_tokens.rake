@@ -13,6 +13,14 @@ namespace :api_tokens do
     puts "Authorization: Bearer #{token.token}"
   end
 
+  desc "Print the read token for the local Prometheus scrape (development only)"
+  task monitoring_token: :environment do
+    abort "api_tokens:monitoring_token is for local development only" unless Rails.env.development?
+
+    token = ApiToken.find_or_create_by!(name: "local-prometheus", access: "read")
+    $stdout.write(token.token)
+  end
+
   desc "List all API tokens"
   task list: :environment do
     tokens = ApiToken.all

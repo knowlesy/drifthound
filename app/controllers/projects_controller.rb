@@ -14,7 +14,7 @@ class ProjectsController < ApplicationController
     authorize @project
     project_name = @project.name
     @project.destroy
-    redirect_to root_path, notice: "Project '#{project_name}' and all its environments have been deleted"
+    redirect_to root_path, notice: "#{helpers.project_label} '#{project_name}' and all its environments have been deleted"
   end
 
   private
