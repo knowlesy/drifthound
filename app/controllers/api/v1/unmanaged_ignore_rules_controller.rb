@@ -7,10 +7,14 @@ module Api
 
       # GET /api/v1/projects/:project_key/environments/:environment_key/ignore_rules
       def index
-        render json: {
-          ignore_rules: @environment.unmanaged_ignore_rules.order(:id).map(&:api_json),
-          builtin_rules: builtin_rules_json
-        }
+        # User rules hold full resource IDs (one-click Ignore), so they follow the plan output rule
+        json = { builtin_rules: builtin_rules_json }
+        if current_api_token.can_read_plan_output?
+          json[:ignore_rules] = @environment.unmanaged_ignore_rules.order(:id).map(&:api_json)
+        else
+          json[:ignore_rules_restricted] = true
+        end
+        render json: json
       end
 
       # POST /api/v1/projects/:project_key/environments/:environment_key/ignore_rules

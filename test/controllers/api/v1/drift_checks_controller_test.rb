@@ -846,6 +846,23 @@ class Api::V1::DriftChecksControllerTest < ActionDispatch::IntegrationTest
     end
   end
 
+  test "integer status values are still accepted" do
+    post_check("int-status", "production", { status: 1 })
+
+    assert_response :created
+    assert_equal "ok", response.parsed_body["status"]
+
+    post_check("int-status", "production", { status: 2 })
+    assert_equal "drift", response.parsed_body["status"]
+  end
+
+  test "invalid status keeps the enum's error message" do
+    post_check("bad-status", "production", { status: "bogus" })
+
+    assert_response :unprocessable_entity
+    assert_equal({ "error" => "'bogus' is not a valid status" }, response.parsed_body)
+  end
+
   test "invalid status returns 422 and creates nothing" do
     assert_no_difference [ -> { Project.count }, -> { Environment.count }, -> { DriftCheck.count } ] do
       post_check("bad-status", "production", { status: "bogus" })

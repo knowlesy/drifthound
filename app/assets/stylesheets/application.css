@@ -3085,3 +3085,19 @@ h1, h2, h3 {
 .ignore-rule-form input[type="text"] {
   flex: 1 1 14rem;
 }
+
+.table-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.ignore-rule-form input,
+.ignore-rule-form select {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Wide tables scroll inside .table-scroll instead of squeezing the identifier column */
+.table-scroll > .unmanaged-table {
+  min-width: 40rem;
+}

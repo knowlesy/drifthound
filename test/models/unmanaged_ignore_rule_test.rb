@@ -73,8 +73,8 @@ class UnmanagedIgnoreRuleTest < ActiveSupport::TestCase
 
   test "validates pattern length and characters" do
     assert_not build_rule(pattern: "").valid?
-    assert_not build_rule(pattern: "a" * 513).valid?
-    assert build_rule(pattern: "a" * 512).valid?
+    assert_not build_rule(pattern: "a" * 1025).valid?
+    assert build_rule(pattern: "a" * 1024).valid?
     assert_not build_rule(pattern: "a\nb").valid?
     assert_not build_rule(pattern: "a\u0000b").valid?
     assert_not build_rule(pattern: "a\tb").valid?

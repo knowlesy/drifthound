@@ -53,8 +53,9 @@ class DriftCheck < ApplicationRecord
     reported = reported.presence || (source.to_s == "terraform" ? nil : "ok")
     return nil if reported.nil?
 
-    reported = reported.to_s
-    raise ArgumentError, "status is not a valid status" unless statuses.key?(reported)
+    # Same rules as the status enum: a name, or an integer value (as before this check existed)
+    reported = statuses.key(reported) if reported.is_a?(Integer) && statuses.value?(reported)
+    raise ArgumentError, "'#{reported}' is not a valid status" unless reported.is_a?(String) && statuses.key?(reported)
 
     return "error" if reported == "error"
     return "drift" if unmanaged_count.to_i > 0

@@ -128,6 +128,22 @@ class UnmanagedIgnoreRulesControllerTest < ActionDispatch::IntegrationTest
     assert_select ".ignore-rules button", text: "Delete", count: 0
   end
 
+  test "custom rules are hidden from users who cannot see plan output" do
+    @env.drift_checks.create!(status: :ok, source: "azure", unmanaged_count: 0, unmanaged_ignored_count: 0)
+    @env.unmanaged_ignore_rules.create!(pattern: "/subscriptions/secret-sub/resourceGroups/rg1")
+    original = Rails.application.config.plan_output_min_role
+    Rails.application.config.plan_output_min_role = "admin"
+    login_as users(:viewer)
+
+    get @env_path
+
+    assert_select ".ignore-rules", text: /1 custom rule \(hidden\)/
+    assert_select ".ignore-rules .builtin-rules"
+    assert_not_includes response.body, "secret-sub"
+  ensure
+    Rails.application.config.plan_output_min_role = original
+  end
+
   test "environment page hides the rules section for terraform-only environments" do
     @env.drift_checks.create!(status: :ok)
     login_as users(:admin)

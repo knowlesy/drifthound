@@ -72,8 +72,8 @@ module CliTestHelper
       @routes << [ test, handler || ->(_cmd, _chdir) { [ stdout, stderr, exit ] } ]
     end
 
-    def call(cmd, chdir: nil)
-      @calls << { cmd: cmd, chdir: chdir }
+    def call(cmd, chdir: nil, merge_stderr: false)
+      @calls << { cmd: cmd, chdir: chdir, merge_stderr: merge_stderr }
       _matcher, handler = @routes.find { |matcher, _| matcher.call(cmd) }
       raise "unexpected command: #{cmd.inspect}" unless handler
 

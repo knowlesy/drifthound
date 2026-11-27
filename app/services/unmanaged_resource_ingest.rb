@@ -85,7 +85,8 @@ class UnmanagedResourceIngest
     if contains_nul?(value)
       raise InvalidPayload, "unmanaged_resources[#{index}].metadata must not contain NUL characters"
     end
-    if value.to_json.bytesize > UnmanagedResource::METADATA_MAX_BYTES
+    # JSON.generate, not ActiveSupport's to_json: that one escapes & < > as six bytes
+    if JSON.generate(value).bytesize > UnmanagedResource::METADATA_MAX_BYTES
       raise InvalidPayload, "unmanaged_resources[#{index}].metadata is too large (maximum is #{UnmanagedResource::METADATA_MAX_BYTES} bytes)"
     end
     value

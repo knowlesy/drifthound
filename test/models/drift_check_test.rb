@@ -253,8 +253,18 @@ class DriftCheckTest < ActiveSupport::TestCase
     assert_equal "error", DriftCheck.resolve_status(reported: "error", source: "azure", unmanaged_count: 5)
   end
 
-  test "resolve_status raises for an invalid status" do
-    assert_raises(ArgumentError) { DriftCheck.resolve_status(reported: "bogus", source: "azure", unmanaged_count: 0) }
+  test "resolve_status raises for an invalid status with the enum's message" do
+    error = assert_raises(ArgumentError) { DriftCheck.resolve_status(reported: "bogus", source: "azure", unmanaged_count: 0) }
+    assert_equal "'bogus' is not a valid status", error.message
+  end
+
+  test "resolve_status accepts integer status values like the enum does" do
+    assert_equal "ok", DriftCheck.resolve_status(reported: 1, source: "terraform", unmanaged_count: nil)
+    assert_equal "drift", DriftCheck.resolve_status(reported: 2, source: "terraform", unmanaged_count: nil)
+    assert_equal "unknown", DriftCheck.resolve_status(reported: 0, source: "terraform", unmanaged_count: nil)
+    assert_equal "error", DriftCheck.resolve_status(reported: 3, source: "azure", unmanaged_count: 4)
+    assert_raises(ArgumentError) { DriftCheck.resolve_status(reported: 9, source: "terraform", unmanaged_count: nil) }
+    assert_raises(ArgumentError) { DriftCheck.resolve_status(reported: "1", source: "terraform", unmanaged_count: nil) }
   end
 
   test "summary_parts lists non-zero parts including unmanaged" do

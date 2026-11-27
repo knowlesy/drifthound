@@ -38,9 +38,32 @@ class Api::V1::UnmanagedIgnoreRulesControllerTest < ActionDispatch::IntegrationT
     assert_equal %w[key field match_type pattern note], builtin.first.keys
   end
 
-  test "read token can list rules" do
+  test "read token gets built-in rules but not the custom rules" do
+    @environment.unmanaged_ignore_rules.create!(pattern: "/subscriptions/secret-sub/resourceGroups/rg1")
+
     get rules_path, headers: @read_header, as: :json
+
     assert_response :success
+    body = response.parsed_body
+    assert_equal true, body["ignore_rules_restricted"]
+    assert_not body.key?("ignore_rules")
+    assert_equal 11, body["builtin_rules"]["azure"].size
+    assert_not_includes response.body, "secret-sub"
+  end
+
+  test "read_plans token gets the custom rules" do
+    token = ApiToken.create!(name: "plans", access: "read_plans")
+    @environment.unmanaged_ignore_rules.create!(pattern: "/x")
+
+    get rules_path, headers: { "Authorization" => "Bearer #{token.token}" }, as: :json
+
+    assert_equal 1, response.parsed_body["ignore_rules"].size
+    assert_not response.parsed_body.key?("ignore_rules_restricted")
+  end
+
+  test "a one-click pattern as long as an identifier is accepted" do
+    post rules_path, params: { pattern: "/" + "a" * 1023, match_type: "exact" }, headers: @write_header, as: :json
+    assert_response :created
   end
 
   test "create adds a rule with defaults" do
@@ -69,7 +92,7 @@ class Api::V1::UnmanagedIgnoreRulesControllerTest < ActionDispatch::IntegrationT
     [
       {},
       { pattern: "" },
-      { pattern: "a" * 513 },
+      { pattern: "a" * 1025 },
       { pattern: "a\nb" },
       { pattern: "x", field: "tags" },
       { pattern: "x", match_type: "regex" },

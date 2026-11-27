@@ -39,13 +39,31 @@ class DriftHoundCliTest < ActiveSupport::TestCase
     assert_includes payload[:raw_output], "Error: no config files"
   end
 
+  test "plan asks the runner to merge stderr into stdout" do
+    _, runner = plan_payload(exit_code: 0)
+    assert_equal true, runner.calls.first[:merge_stderr]
+  end
+
+  test "the default runner keeps stdout and stderr interleaved when merging" do
+    cmd = [ "sh", "-c", "echo out1; echo err1 >&2; echo out2; echo err2 >&2" ]
+
+    out, err, status = DriftHoundCli::DEFAULT_RUNNER.call(cmd, merge_stderr: true)
+    assert_equal "out1\nerr1\nout2\nerr2\n", out
+    assert_equal "", err
+    assert status.success?
+
+    out, err, = DriftHoundCli::DEFAULT_RUNNER.call(cmd)
+    assert_equal "out1\nout2\n", out
+    assert_equal "err1\nerr2\n", err
+  end
+
   test "terragrunt runs terragrunt" do
     _, runner = plan_payload(exit_code: 0, tool: "terragrunt")
     assert_equal "terragrunt", runner.commands.first.first
   end
 
   test "a runner that raises becomes an error check" do
-    runner = ->(_cmd, chdir: nil) { raise Errno::ENOENT, "terraform" }
+    runner = ->(_cmd, **_kw) { raise Errno::ENOENT, "terraform" }
     payload = nil
     capture_io { payload = DriftHoundCli::Modes::Plan.new(OPTS.merge(dir: "/work"), runner: runner).build_payload }
 
@@ -84,7 +102,7 @@ class DriftHoundCliTest < ActiveSupport::TestCase
     failing = FakeRunner.new { on(exit: 128) }
     assert_nil DriftHoundCli::Git.detect_repository("/w", failing)
 
-    missing = ->(_cmd, chdir: nil) { raise Errno::ENOENT, "git" }
+    missing = ->(_cmd, **_kw) { raise Errno::ENOENT, "git" }
     assert_nil DriftHoundCli::Git.detect_repository("/w", missing)
   end
 

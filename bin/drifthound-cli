@@ -22,14 +22,17 @@ module DriftHoundCli
   class UsageError < StandardError; end
 
   # Every shell-out goes through a runner so tests can replace it.
-  # A runner is callable(cmd_array, chdir: nil) -> [stdout, stderr, status]
+  # A runner is callable(cmd_array, chdir: nil, merge_stderr: false) -> [stdout, stderr, status]
   # where status responds to success? and exitstatus. Commands are arrays, so
-  # no shell is involved.
-  DEFAULT_RUNNER = lambda do |cmd, chdir: nil|
-    if chdir
-      Open3.capture3(*cmd, chdir: chdir)
+  # no shell is involved. With merge_stderr the two streams come back
+  # interleaved as one string in the first slot, and stderr is "".
+  DEFAULT_RUNNER = lambda do |cmd, chdir: nil, merge_stderr: false|
+    popen_opts = chdir ? { chdir: chdir } : {}
+    if merge_stderr
+      combined, status = Open3.capture2e(*cmd, **popen_opts)
+      [ combined, '', status ]
     else
-      Open3.capture3(*cmd)
+      Open3.capture3(*cmd, **popen_opts)
     end
   end
 
@@ -179,7 +182,7 @@ module DriftHoundCli
         puts "Running: #{cmd.join(' ')} in #{dir}"
         start_time = Time.now
         begin
-          stdout, stderr, run_status = @runner.call(cmd, chdir: dir)
+          stdout, stderr, run_status = @runner.call(cmd, chdir: dir, merge_stderr: true)
           output = Text.clean("#{stdout}#{stderr}")
           exit_code = run_status.exitstatus
         rescue StandardError => e
@@ -194,11 +197,12 @@ module DriftHoundCli
 
         # Determine status from -detailed-exitcode
         # Exit code 0 = no changes, 1 = error, 2 = changes detected (drift)
-        status = case exit_code
-                 when 0 then 'ok'
-                 when 2 then 'drift'
-                 else 'error'
-                 end
+        status =
+          case exit_code
+          when 0 then 'ok'
+          when 2 then 'drift'
+          else 'error'
+          end
         puts "Determined status: #{status}"
 
         add_count = output[/ (\d+) to add/, 1]&.to_i || 0
@@ -397,6 +401,7 @@ module DriftHoundCli
       def query_graph(query)
         rows = []
         token = nil
+        total = nil
         MAX_PAGES.times do
           cmd = [ 'az', 'graph', 'query', '-q', query, '--first', PAGE_SIZE.to_s, '--subscriptions', *@subscriptions, '--output', 'json' ]
           cmd += [ '--skip-token', token ] if token
@@ -405,12 +410,24 @@ module DriftHoundCli
 
           page_rows, next_token = parse_page(out)
           rows.concat(page_rows)
-          return rows if next_token.nil?
+          total = page_total(out) || total
+          if next_token.nil?
+            if total && rows.size < total
+              raise AzureError, "az graph query returned #{rows.size} rows but reported #{total} total records; refusing to compare an incomplete inventory"
+            end
+            return rows
+          end
           raise AzureError, 'az graph query returned the same skip token twice' if next_token == token
 
           token = next_token
         end
         raise AzureError, "az graph query returned more than #{MAX_PAGES} pages"
+      end
+
+      def page_total(text)
+        body = JSON.parse(text.to_s)
+        value = body.is_a?(Hash) ? body['total_records'] : nil
+        value.is_a?(Integer) ? value : nil
       end
 
       # `az graph query` prints a Hash with data and skip_token; a bare array is also accepted

@@ -206,6 +206,13 @@ class AzureUnmanagedTest < ActiveSupport::TestCase
     assert_error azure_payload(azure_opts, runner), /same skip token/
   end
 
+  test "fewer rows than total_records gives an error check" do
+    page = JSON.parse(fixture_text("arg_page2.json")).merge("total_records" => 99)
+    runner = FakeRunner.new { stub_az(self, page2: JSON.generate(page)) }
+
+    assert_error azure_payload(azure_opts, runner), /returned 11 rows but reported 99 total records/
+  end
+
   test "a missing subscription gives an error check" do
     opts = azure_opts(subscriptions: [ S1, "00000000-0000-0000-0000-000000000099" ])
 
@@ -255,7 +262,7 @@ class AzureUnmanagedTest < ActiveSupport::TestCase
   end
 
   test "a runner that raises gives an error check" do
-    runner = ->(_cmd, chdir: nil) { raise Errno::ENOENT, "az" }
+    runner = ->(_cmd, **_kw) { raise Errno::ENOENT, "az" }
 
     assert_error azure_payload(azure_opts, runner), /unexpected Errno::ENOENT/
   end

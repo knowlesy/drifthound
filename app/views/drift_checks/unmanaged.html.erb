@@ -9,6 +9,7 @@
     <% if @reported.empty? %>
       <p class="unmanaged-empty">No unmanaged resources were reported by this check.</p>
     <% else %>
+      <div class="table-scroll">
       <table class="unmanaged-table">
         <thead>
           <tr>
@@ -41,12 +42,14 @@
           <% end %>
         </tbody>
       </table>
+      </div>
     <% end %>
 
     <% if @ignored.any? %>
       <details class="unmanaged-ignored">
         <summary><%= @check.unmanaged_ignored_count.to_i %> ignored</summary>
-        <table class="unmanaged-table">
+        <div class="table-scroll">
+      <table class="unmanaged-table">
           <thead>
             <tr><th>Identifier</th><th>Reason</th></tr>
           </thead>
@@ -59,6 +62,7 @@
             <% end %>
           </tbody>
         </table>
+      </div>
       </details>
     <% end %>
 

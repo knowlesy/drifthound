@@ -86,6 +86,12 @@ class UnmanagedResourceIngestTest < ActiveSupport::TestCase
     assert_invalid(/\[0\]\.metadata is too large/, [ item(metadata: { "tags" => "x" * 2100 }) ])
   end
 
+  test "metadata size is measured as plain JSON, not with escaped ampersands" do
+    tags = { "q" => "&" * 1500 }
+    assert_equal 1, ingest([ item(metadata: { "tags" => tags }) ]).unmanaged_count
+    assert_invalid(/metadata is too large/, [ item(metadata: { "tags" => { "q" => "&" * 2100 } }) ])
+  end
+
   test "rejects NUL characters in strings and nested metadata" do
     assert_invalid(/identifier must not contain NUL/, [ item("/a\u0000b") ])
     assert_invalid(/name must not contain NUL/, [ item(name: "a\u0000") ])

@@ -4,7 +4,7 @@ class UnmanagedIgnoreRule < ApplicationRecord
   FIELDS = %w[identifier resource_type name scope location].freeze
   MATCH_TYPES = %w[exact glob].freeze
   MAX_PER_ENVIRONMENT = 200
-  PATTERN_MAX_LENGTH = 512
+  PATTERN_MAX_LENGTH = 1024
 
   belongs_to :environment
   belongs_to :created_by, class_name: "User", optional: true

@@ -1,11 +1,16 @@
 <% can_manage = policy(UnmanagedIgnoreRule).create? %>
+<% can_view_rules = policy(environment).view_plan? %>
 <section class="ignore-rules">
   <h2>Unmanaged resource ignore rules</h2>
   <p class="ignore-rules-help">Rules apply to checks received from now on. Existing checks are not changed.</p>
 
-  <% if rules.empty? %>
+  <% if !can_view_rules %>
+    <%# Custom rules hold full resource IDs, so they follow the plan output restriction %>
+    <p class="unmanaged-empty"><%= pluralize(rules.size, "custom rule") %> (hidden)</p>
+  <% elsif rules.empty? %>
     <p class="unmanaged-empty">No custom rules yet.</p>
   <% else %>
+    <div class="table-scroll">
     <table class="unmanaged-table">
       <thead>
         <tr>
@@ -37,15 +42,16 @@
         <% end %>
       </tbody>
     </table>
+    </div>
   <% end %>
 
-  <% if can_manage %>
+  <% if can_manage && can_view_rules %>
     <%= form_with scope: :unmanaged_ignore_rule, url: project_environment_ignore_rules_path(project.key, environment.key), class: "ignore-rule-form" do |f| %>
       <%= f.select :field, UnmanagedIgnoreRule::FIELDS, {}, "aria-label": "Field" %>
       <%= f.select :match_type, UnmanagedIgnoreRule::MATCH_TYPES, {}, "aria-label": "Match type" %>
-      <%= f.text_field :pattern, placeholder: "Pattern, for example */resourceGroups/tmp-*", required: true, maxlength: UnmanagedIgnoreRule::PATTERN_MAX_LENGTH, "aria-label": "Pattern" %>
+      <%= f.text_field :pattern, placeholder: "Pattern, for example */resourceGroups/tmp-*", required: true, maxlength: UnmanagedIgnoreRule::PATTERN_MAX_LENGTH, size: nil, "aria-label": "Pattern" %>
       <%= f.select :source, DriftCheck.sources.keys, { include_blank: "Any source" }, "aria-label": "Source" %>
-      <%= f.text_field :note, placeholder: "Note (optional)", maxlength: 255, "aria-label": "Note" %>
+      <%= f.text_field :note, placeholder: "Note (optional)", maxlength: 255, size: nil, "aria-label": "Note" %>
       <%= f.submit "Add rule", class: "btn btn-sm" %>
     <% end %>
   <% end %>
@@ -56,7 +62,8 @@
       <summary>Built-in rules</summary>
       <% builtin.each do |source, source_rules| %>
         <h3><%= source %></h3>
-        <table class="unmanaged-table">
+        <div class="table-scroll">
+    <table class="unmanaged-table">
           <thead>
             <tr><th>Pattern</th><th>Note</th></tr>
           </thead>
@@ -69,6 +76,7 @@
             <% end %>
           </tbody>
         </table>
+    </div>
       <% end %>
     </details>
   <% end %>
