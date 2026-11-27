@@ -726,14 +726,15 @@ drifthound_environment_status{status="drift"} == 1
 
 ### Example Alerts
 
-`dev/monitoring/alerts.yml` holds these rules. `DriftCheckStale` does not fire for environments that have no checks, because they have no timestamp series.
+`dev/monitoring/alerts.yml` holds these rules. `DriftCheckStale` does not fire for environments that have no checks, because they have no timestamp series. Only `DriftDetected` skips excluded environments, because whether they should alert is up to each team; to do the same for another rule, append `unless on (project, environment) drifthound_environment_excluded_from_metrics == 1` to its `expr`.
 
 ```yaml
 # Example alert rules for DriftHound metrics.
 #
-# `==` binds tighter than `unless`, so
-#   a == 1 unless on (project, environment) b == 1
-# reads as (a == 1) unless on (...) (b == 1).
+# Only DriftDetected skips environments excluded from the dashboard metrics. Add
+#   unless on (project, environment) drifthound_environment_excluded_from_metrics == 1
+# to the other rules if you want the same. `==` binds tighter than `unless`, so
+# that reads as (a) unless on (...) (b == 1).
 groups:
   - name: drifthound
     rules:
@@ -750,7 +751,6 @@ groups:
       - alert: DriftCheckFailing
         expr: >-
           drifthound_environment_status{status="error"} == 1
-          unless on (project, environment) drifthound_environment_excluded_from_metrics == 1
         for: 30m
         labels:
           severity: warning
@@ -760,7 +760,6 @@ groups:
       - alert: DriftCheckStale
         expr: >-
           time() - drifthound_environment_last_check_timestamp_seconds > 86400
-          unless on (project, environment) drifthound_environment_excluded_from_metrics == 1
         for: 1h
         labels:
           severity: warning
@@ -770,7 +769,6 @@ groups:
       - alert: DriftWouldDestroyResources
         expr: >-
           drifthound_environment_pending_changes{action="destroy"} > 0
-          unless on (project, environment) drifthound_environment_excluded_from_metrics == 1
         labels:
           severity: critical
         annotations:
