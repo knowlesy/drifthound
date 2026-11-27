@@ -15,6 +15,8 @@ class DashboardController < ApplicationController
       @project_environment_status_counts[env.last_check_status] += 1
     end
 
+    @environment_rollups = EnvironmentRollup.build(@project_environments)
+
     # Build chart data
     @drift_chart_data = build_drift_chart_data
     @status_distribution_data = build_status_distribution_data

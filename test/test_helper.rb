@@ -12,6 +12,15 @@ module ActiveSupport
     fixtures :all
 
     # Add more helper methods to be used by all tests here...
+
+    # Temporarily overrides the display label for projects, restoring it afterwards.
+    def with_project_label(singular, plural = singular.pluralize)
+      original = Rails.application.config.project_label
+      Rails.application.config.project_label = { singular: singular, plural: plural }
+      yield
+    ensure
+      Rails.application.config.project_label = original
+    end
   end
 end
 

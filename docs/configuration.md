@@ -76,6 +76,35 @@ bin/rails secret
 - Changing this value will invalidate all existing sessions and encrypted data
 - Each environment should use a different secret
 
+## Display Settings
+
+### PROJECT_LABEL
+
+Changes the word DriftHound shows for a project in the web UI. Use it when your teams call the same thing a "Layer", "Stack", "Account" or similar.
+
+**Default:** `Project`
+
+```bash
+PROJECT_LABEL=Layer
+```
+
+### PROJECT_LABEL_PLURAL
+
+The plural form of the label. Optional.
+
+**Default:** `PROJECT_LABEL` pluralized (for example `Layers`)
+
+```bash
+PROJECT_LABEL=Policy
+PROJECT_LABEL_PLURAL=Policies
+```
+
+**What changes:** the dashboard table header, search placeholder, empty state, chart titles and tooltips, the environment overview page, the "Delete" button and dialog on the project page, the notice shown after a project is deleted, and the "Project:" line in Slack and text notifications.
+
+**What never changes:** API paths and JSON fields, CLI flags, URLs and the database. A label is display text only.
+
+**Lower case in sentences:** mid-sentence the label is written in lower case, but only for capitalised words, so `Layer` becomes "layer" while `AWS Account` becomes "AWS account".
+
 ## Access Control
 
 ### PUBLIC_MODE
@@ -204,7 +233,7 @@ When logged in as admin, you can:
 Test or short-lived environments can skew the dashboard charts. An admin can exclude an environment with the **Exclude from Metrics** button on its page, and include it again with **Include in Metrics**. `write` API tokens can set the same flag; see [API Usage](api-usage.md#update-an-environment).
 
 - An excluded environment is left out of every dashboard chart and the stability score.
-- It stays in every list: the dashboard table and status counts, the project page, its own page and the API, with its drift shown as normal.
+- It stays in every list: the dashboard table (both groupings), environment roll-ups and status counts, the project page, its own page and the API, with its drift shown as normal.
 - New checks are still recorded, and notifications are not affected.
 
 Read-only operations (viewing dashboard, projects, environments, drift history) do not require authentication.
@@ -651,6 +680,134 @@ DriftHound uses Rails' async adapter for background job processing. This means:
 
 **Note:** For high-traffic applications where job durability is critical, you may want to switch to Solid Queue or Sidekiq in the future.
 
+## Prometheus Metrics
+
+DriftHound can expose the drift state of every environment at `GET /metrics` in the Prometheus text format, so you can chart and alert on it in Prometheus and Grafana.
+
+### METRICS_ENABLED
+
+Enables the `/metrics` endpoint.
+
+```bash
+METRICS_ENABLED=true
+```
+
+**Default:** `false`. When off, `/metrics` returns `404`.
+
+### Authentication
+
+`/metrics` uses the same API tokens as the API:
+
+- Any API token works, and `read` access is enough. Create a dedicated, named token for each scraper so you can revoke it on its own.
+- A missing or invalid token gets `401`. `PUBLIC_MODE` does not open this endpoint.
+- Plan output is never exported.
+- Scrapes are logged like any other request. Only `/up` is silenced (see [Silenced Endpoints](#silenced-endpoints)).
+
+Example scrape config:
+
+```yaml
+scrape_configs:
+  - job_name: drifthound
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/drifthound.token
+    static_configs:
+      - targets: [ "drifthound.example.com:443" ]
+    scheme: https
+```
+
+### Metrics
+
+All metrics are gauges. The `project` and `environment` labels hold the keys, which are letters, digits, `-` and `_`. Display names appear only in `drifthound_environment_info`.
+
+| Metric | Labels | Meaning |
+|--------|--------|---------|
+| `drifthound_build_info` | `version` | Running DriftHound version. Always 1. |
+| `drifthound_environment_info` | `project`, `environment`, `project_name`, `environment_name` | Display names of each environment and its project, for joins in dashboards. Always 1. |
+| `drifthound_environment_status` | `project`, `environment`, `status` | 1 for the current status (`ok`, `drift`, `error`, `unknown`), 0 for the others. |
+| `drifthound_environment_last_check_timestamp_seconds` | `project`, `environment` | Unix time of the latest drift check. |
+| `drifthound_environment_last_check_duration_seconds` | `project`, `environment` | Duration of the latest drift check, in whole seconds. |
+| `drifthound_environment_pending_changes` | `project`, `environment`, `action` | Resources to `add`, `change` or `destroy` according to the latest drift check. |
+| `drifthound_environment_excluded_from_metrics` | `project`, `environment` | 1 if the environment is excluded from the dashboard metrics, 0 otherwise. |
+
+Things to know:
+
+- The timestamp, duration and pending changes all come from the same latest check, so they always describe one check.
+- An environment without checks exports only `drifthound_environment_info`, `drifthound_environment_status` (as `unknown`) and `drifthound_environment_excluded_from_metrics`.
+- A check that reports no duration omits that environment's duration series. A check that reports no count for an action omits that action's series. A missing value is not zero.
+- The duration is stored in whole seconds, so a fractional value sent by the CLI is truncated.
+
+### Computed at Scrape Time
+
+The values are read from the database on every scrape, so every replica returns the same series. There are no check counters, because [data retention](#drift_check_retention_days) deletes old checks.
+
+With several replicas, scrape one target (the Service). If you scrape every pod, aggregate with `max by (project, environment) (...)`, and keep `status` or `action` in the `by` clause for the metrics that have them.
+
+### Excluded Environments
+
+Environments excluded from the dashboard metrics (see [Excluding Environments From Dashboard Metrics](#excluding-environments-from-dashboard-metrics)) are still exported, with `drifthound_environment_excluded_from_metrics` set to 1. To leave them out of a query or alert, use this pattern:
+
+```promql
+drifthound_environment_status{status="drift"} == 1
+  unless on (project, environment) drifthound_environment_excluded_from_metrics == 1
+```
+
+`==` binds tighter than `unless`, so this reads as `(a == 1) unless on (...) (b == 1)`.
+
+### Example Alerts
+
+`dev/monitoring/alerts.yml` holds these rules. `DriftCheckStale` does not fire for environments that have no checks, because they have no timestamp series. Only `DriftDetected` skips excluded environments, because whether they should alert is up to each team; to do the same for another rule, append `unless on (project, environment) drifthound_environment_excluded_from_metrics == 1` to its `expr`.
+
+```yaml
+# Example alert rules for DriftHound metrics.
+#
+# Only DriftDetected skips environments excluded from the dashboard metrics. Add
+#   unless on (project, environment) drifthound_environment_excluded_from_metrics == 1
+# to the other rules if you want the same. `==` binds tighter than `unless`, so
+# that reads as (a) unless on (...) (b == 1).
+groups:
+  - name: drifthound
+    rules:
+      - alert: DriftDetected
+        expr: >-
+          drifthound_environment_status{status="drift"} == 1
+          unless on (project, environment) drifthound_environment_excluded_from_metrics == 1
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Drift detected in {{ $labels.project }}/{{ $labels.environment }}"
+
+      - alert: DriftCheckFailing
+        expr: >-
+          drifthound_environment_status{status="error"} == 1
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Drift check is failing for {{ $labels.project }}/{{ $labels.environment }}"
+
+      - alert: DriftCheckStale
+        expr: >-
+          time() - drifthound_environment_last_check_timestamp_seconds > 86400
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "No drift check in 24h for {{ $labels.project }}/{{ $labels.environment }}"
+
+      - alert: DriftWouldDestroyResources
+        expr: >-
+          drifthound_environment_pending_changes{action="destroy"} > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Drift in {{ $labels.project }}/{{ $labels.environment }} would destroy {{ $value }} resources"
+```
+
+To try Prometheus and Grafana with a ready-made dashboard, see [Trying Prometheus and Grafana Locally](../README.md#trying-prometheus-and-grafana-locally).
+
 ## Complete Example
 
 ### Production Environment Variables
@@ -664,9 +821,15 @@ APP_URL=https://drifthound.example.com
 RAILS_LOG_LEVEL=info
 SECRET_KEY_BASE=340b6113695da1baed5d5b7945bff4dc4ab86b75f602c5183624c1b87ffc17d192c18572196456bc3242b13ebf74ab75053c9c87ee2202d2718fbfe85e2ff94a
 
+# Display
+PROJECT_LABEL=Layer
+
 # Access Control (private by default)
 PUBLIC_MODE=false
 PLAN_OUTPUT_MIN_ROLE=viewer
+
+# Prometheus metrics at /metrics (needs an API token)
+METRICS_ENABLED=false
 
 # Admin Authentication (required in production)
 ADMIN_EMAIL=admin@example.com
@@ -734,6 +897,16 @@ curl -X POST http://localhost:3000/api/v1/projects/test/environments/dev/checks 
   -H "Content-Type: application/json" \
   -d '{"status": "ok"}'
 ```
+
+### Check the Metrics Endpoint
+
+With `METRICS_ENABLED=true`:
+
+```bash
+curl -H "Authorization: Bearer YOUR_TOKEN" http://localhost:3000/metrics
+```
+
+Should return the metrics in the Prometheus text format. Without a token it returns `401`, and with `METRICS_ENABLED=false` it returns `404`.
 
 ### Verify Slack Integration
 

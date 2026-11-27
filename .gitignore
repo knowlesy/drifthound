@@ -36,3 +36,4 @@
 .DS_Store
 
 .claude/
+/dev/monitoring/.token*

@@ -1,0 +1,45 @@
+# Local Prometheus and Grafana next to DriftHound.
+#
+#   make docker-monitoring-start
+#
+# Then open Grafana at http://localhost:3001 (anonymous viewer, DriftHound dashboard)
+# or Prometheus at http://localhost:9090.
+#
+# The app exposes /metrics with METRICS_ENABLED=true. The scrape uses a read API token
+# that make writes to dev/monitoring/.token (git-ignored).
+
+services:
+  app:
+    environment:
+      METRICS_ENABLED: "true"
+      RAILS_DEVELOPMENT_HOSTS: app   # Rails dev host check blocks Host: app:3000 otherwise
+
+  prometheus:
+    image: prom/prometheus:v3.16.0
+    depends_on:
+      - app
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./dev/monitoring:/etc/prometheus:ro   # mount the directory, not .token
+      - prometheus_data:/prometheus
+
+  grafana:
+    image: grafana/grafana:13.3.2
+    depends_on:
+      - prometheus
+    ports:
+      - "3001:3000"
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/dashboards/drifthound.json
+    volumes:
+      - ./dev/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./dev/grafana/dashboards:/etc/dashboards:ro
+
+volumes:
+  prometheus_data:

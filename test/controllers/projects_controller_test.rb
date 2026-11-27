@@ -71,4 +71,27 @@ class ProjectsControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
     assert_select ".environment-row .col-summary", text: /5 unmanaged/
   end
+
+  test "delete button and modal use a custom project label" do
+    post login_path, params: { email: users(:admin).email, password: "testpass1" }
+
+    with_project_label("Layer", "Layers") do
+      get project_path(@project.key)
+
+      assert_select "button.btn-danger-outline", text: "Delete Layer"
+      assert_select ".confirm-modal h2", text: "Delete Layer?"
+      assert_select ".confirm-modal .btn-danger", text: "Delete Layer"
+    end
+  end
+
+  test "delete flash uses a custom project label" do
+    post login_path, params: { email: users(:admin).email, password: "testpass1" }
+
+    with_project_label("Layer", "Layers") do
+      delete project_path(@project.key)
+
+      assert_redirected_to root_path
+      assert_equal "Layer 'Test Project' and all its environments have been deleted", flash[:notice]
+    end
+  end
 end

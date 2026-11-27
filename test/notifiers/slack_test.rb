@@ -210,4 +210,20 @@ class Notifiers::SlackTest < ActiveSupport::TestCase
       assert_equal "*Project:* R&amp;D &lt;team&gt;   *Environment:* &lt;!channel&gt; &lt;https://phish.example|Fix it here&gt;", text
     end
   end
+
+  test "uses a custom project label in blocks" do
+    state = @environment.notification_states.first
+
+    with_project_label("Layer") do
+      [
+        Notifiers::Slack.build_blocks(@notification),
+        Notifiers::Slack.build_resolved_blocks(@notification, state)
+      ].each do |blocks|
+        text = blocks.find { |block| block.dig(:text, :type) == "mrkdwn" }.dig(:text, :text)
+
+        assert_includes text, "*Layer:* Test Project"
+        assert_not_includes text, "*Project:*"
+      end
+    end
+  end
 end
