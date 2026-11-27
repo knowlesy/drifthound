@@ -51,3 +51,4 @@
 /Dockerfile*
 
 docs/
+/dev/monitoring/.token*
