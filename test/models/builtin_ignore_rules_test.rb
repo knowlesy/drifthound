@@ -72,11 +72,6 @@ class BuiltinIgnoreRulesTest < ActiveSupport::TestCase
     "argocd-crd-applicationsets" => [ { "identifier" => "apiextensions.k8s.io/CustomResourceDefinition/_cluster/applicationsets.argoproj.io" }, { "identifier" => "apiextensions.k8s.io/CustomResourceDefinition/_cluster/rollouts.argoproj.io" } ],
     "argocd-crd-appprojects" => [ { "identifier" => "apiextensions.k8s.io/CustomResourceDefinition/_cluster/appprojects.argoproj.io" }, { "identifier" => "apiextensions.k8s.io/CustomResourceDefinition/_cluster/rollouts.argoproj.io" } ],
     "argocd-default-project" => [ { "identifier" => "argoproj.io/AppProject/argocd/default" }, { "identifier" => "argoproj.io/AppProject/argocd/default-team" } ],
-    "argocd-clusterroles" => [ { "identifier" => "rbac.authorization.k8s.io/ClusterRole/_cluster/argocd-server" }, { "identifier" => "rbac.authorization.k8s.io/ClusterRole/_cluster/my-argocd-x" } ],
-    "argocd-clusterrolebindings" => [ { "identifier" => "rbac.authorization.k8s.io/ClusterRoleBinding/_cluster/argocd-server" }, { "identifier" => "rbac.authorization.k8s.io/ClusterRoleBinding/_cluster/my-argocd-x" } ],
-    "ns-gatekeeper-system" => [ { "scope" => "gatekeeper-system" }, { "scope" => "gatekeeper" } ],
-    "ns-gatekeeper-system-object" => [ { "identifier" => "core/Namespace/_cluster/gatekeeper-system" }, { "identifier" => "core/Namespace/_cluster/gatekeeper" } ],
-    "aks-gatekeeper-crds" => [ { "identifier" => "apiextensions.k8s.io/CustomResourceDefinition/_cluster/constrainttemplates.templates.gatekeeper.sh" }, { "identifier" => "apiextensions.k8s.io/CustomResourceDefinition/_cluster/foo.gatekeeper.sh.example.com" } ],
     "aks-policy-templates" => [ { "identifier" => "templates.gatekeeper.sh/ConstraintTemplate/_cluster/k8sazurecontainerlimits" }, { "identifier" => "templates.gatekeeper.sh/ConstraintTemplate/_cluster/k8srequiredlabels" } ],
     "aks-policy-constraints" => [ { "identifier" => "constraints.gatekeeper.sh/K8sAzureV1/_cluster/azurepolicy-abc" }, { "identifier" => "constraints.gatekeeper.sh/K8sRequiredLabels/_cluster/team-labels" } ],
     "ns-calico-system" => [ { "scope" => "calico-system" }, { "scope" => "calico" } ],
@@ -89,12 +84,16 @@ class BuiltinIgnoreRulesTest < ActiveSupport::TestCase
     "ns-app-routing-system-object" => [ { "identifier" => "core/Namespace/_cluster/app-routing-system" }, { "identifier" => "core/Namespace/_cluster/app-routing" } ],
     "ns-aks-istio" => [ { "scope" => "aks-istio-system" }, { "scope" => "istio-system" } ],
     "ns-aks-istio-object" => [ { "identifier" => "core/Namespace/_cluster/aks-istio-ingress" }, { "identifier" => "core/Namespace/_cluster/istio-system" } ],
-    "aks-crds" => [ { "identifier" => "apiextensions.k8s.io/CustomResourceDefinition/_cluster/foo.kubernetes.azure.com" }, { "identifier" => "apiextensions.k8s.io/CustomResourceDefinition/_cluster/resourcegroups.resources.azure.com" } ],
-    "aks-storageclass-default" => [ { "identifier" => "storage.k8s.io/StorageClass/_cluster/default" }, { "identifier" => "storage.k8s.io/StorageClass/_cluster/default-fast" } ],
-    "aks-storageclass-managed" => [ { "identifier" => "storage.k8s.io/StorageClass/_cluster/managed-premium" }, { "identifier" => "storage.k8s.io/StorageClass/_cluster/premium-ssd" } ],
-    "aks-storageclass-azurefile" => [ { "identifier" => "storage.k8s.io/StorageClass/_cluster/azurefile-csi" }, { "identifier" => "storage.k8s.io/StorageClass/_cluster/nfs" } ],
-    "aks-csidrivers" => [ { "identifier" => "storage.k8s.io/CSIDriver/_cluster/disk.csi.azure.com" }, { "identifier" => "storage.k8s.io/CSIDriver/_cluster/ebs.csi.aws.com" } ]
-  }.freeze
+    "aks-crds" => [ { "identifier" => "apiextensions.k8s.io/CustomResourceDefinition/_cluster/foo.kubernetes.azure.com" }, { "identifier" => "apiextensions.k8s.io/CustomResourceDefinition/_cluster/resourcegroups.resources.azure.com" } ]
+  }.merge(
+    BuiltinIgnoreRules::ARGOCD_CLUSTER_RBAC.each_with_object({}) do |name, cases|
+      cases["argocd-clusterrole-#{name}"] = [ { "identifier" => "rbac.authorization.k8s.io/ClusterRole/_cluster/#{name}" }, { "identifier" => "rbac.authorization.k8s.io/ClusterRole/_cluster/#{name}-handmade" } ]
+      cases["argocd-clusterrolebinding-#{name}"] = [ { "identifier" => "rbac.authorization.k8s.io/ClusterRoleBinding/_cluster/#{name}" }, { "identifier" => "rbac.authorization.k8s.io/ClusterRoleBinding/_cluster/#{name}-handmade" } ]
+    end,
+    BuiltinIgnoreRules::AKS_STORAGE_CLASSES.each_with_object({}) do |name, cases|
+      cases["aks-storageclass-#{name}"] = [ { "identifier" => "storage.k8s.io/StorageClass/_cluster/#{name}" }, { "identifier" => "storage.k8s.io/StorageClass/_cluster/#{name}-hand-made" } ]
+    end
+  ).freeze
 
   def argo_rules
     BuiltinIgnoreRules.for("argocd")
@@ -124,6 +123,21 @@ class BuiltinIgnoreRulesTest < ActiveSupport::TestCase
   test "argocd built-ins do not hide the contents of the default namespace" do
     attrs = { "identifier" => "core/ConfigMap/default/app", "scope" => "default", "name" => "app" }
     assert argo_rules.none? { |r| r.matches?(attrs) }
+  end
+
+  test "argocd built-ins do not hide hand-made look-alikes" do
+    [
+      "rbac.authorization.k8s.io/ClusterRole/_cluster/argocd-deployer-handmade",
+      "rbac.authorization.k8s.io/ClusterRoleBinding/_cluster/argocd-deployer-handmade",
+      "storage.k8s.io/StorageClass/_cluster/managed-hand-made",
+      "storage.k8s.io/StorageClass/_cluster/azurefile-hand-made",
+      "apiextensions.k8s.io/CustomResourceDefinition/_cluster/constrainttemplates.templates.gatekeeper.sh",
+      "storage.k8s.io/CSIDriver/_cluster/disk.csi.azure.com",
+      "core/Namespace/_cluster/gatekeeper-system"
+    ].each do |identifier|
+      assert argo_rules.none? { |r| r.matches?("identifier" => identifier) }, identifier
+    end
+    assert argo_rules.none? { |r| r.matches?("scope" => "gatekeeper-system") }
   end
 
   test "argocd built-ins do not hide ordinary workloads" do

@@ -29,6 +29,15 @@ class BuiltinIgnoreRules
   end
   private_class_method :argo_namespace_rules
 
+  # Names from the upstream Argo CD install manifests (cluster install). Unverified: written from memory, not checked against a release.
+  ARGOCD_CLUSTER_RBAC = %w[argocd-application-controller argocd-applicationset-controller argocd-server].freeze
+
+  # Exact names of the StorageClasses AKS creates. Unverified: written from memory, not checked against a cluster.
+  AKS_STORAGE_CLASSES = %w[
+    default managed managed-csi managed-csi-premium managed-premium
+    azurefile azurefile-csi azurefile-csi-premium azurefile-premium
+  ].freeze
+
   REGISTRY = {
     "azure" => [
       azure_rule("network-watcher-rg", "/subscriptions/*/resourceGroups/NetworkWatcherRG", "Network Watcher resource group"),
@@ -60,10 +69,12 @@ class BuiltinIgnoreRules
       argo_rule("argocd-crd-applicationsets", "apiextensions.k8s.io/CustomResourceDefinition/_cluster/applicationsets.argoproj.io", "Argo CD CRD", match_type: "exact"),
       argo_rule("argocd-crd-appprojects", "apiextensions.k8s.io/CustomResourceDefinition/_cluster/appprojects.argoproj.io", "Argo CD CRD", match_type: "exact"),
       argo_rule("argocd-default-project", "argoproj.io/AppProject/*/default", "Argo CD's built-in default AppProject"),
-      argo_rule("argocd-clusterroles", "rbac.authorization.k8s.io/ClusterRole/_cluster/argocd-*", "Argo CD install ClusterRoles (default names)"),
-      argo_rule("argocd-clusterrolebindings", "rbac.authorization.k8s.io/ClusterRoleBinding/_cluster/argocd-*", "Argo CD install ClusterRoleBindings (default names)"),
-      *argo_namespace_rules("gatekeeper-system", "Gatekeeper namespace"),
-      argo_rule("aks-gatekeeper-crds", "apiextensions.k8s.io/CustomResourceDefinition/_cluster/*.gatekeeper.sh", "Gatekeeper CRDs"),
+      *ARGOCD_CLUSTER_RBAC.flat_map do |name|
+        [
+          argo_rule("argocd-clusterrole-#{name}", "rbac.authorization.k8s.io/ClusterRole/_cluster/#{name}", "Argo CD install ClusterRole", match_type: "exact"),
+          argo_rule("argocd-clusterrolebinding-#{name}", "rbac.authorization.k8s.io/ClusterRoleBinding/_cluster/#{name}", "Argo CD install ClusterRoleBinding", match_type: "exact")
+        ]
+      end,
       argo_rule("aks-policy-templates", "templates.gatekeeper.sh/ConstraintTemplate/_cluster/k8sazure*", "Azure Policy constraint templates"),
       argo_rule("aks-policy-constraints", "constraints.gatekeeper.sh/*/_cluster/azurepolicy-*", "Azure Policy constraints"),
       *argo_namespace_rules("calico-system", "Calico namespace"),
@@ -74,10 +85,9 @@ class BuiltinIgnoreRules
       argo_rule("ns-aks-istio", "aks-istio-*", "Objects in AKS Istio add-on namespaces", field: "scope"),
       argo_rule("ns-aks-istio-object", "core/Namespace/_cluster/aks-istio-*", "AKS Istio add-on namespaces"),
       argo_rule("aks-crds", "apiextensions.k8s.io/CustomResourceDefinition/_cluster/*.kubernetes.azure.com", "AKS add-on CRDs"),
-      argo_rule("aks-storageclass-default", "storage.k8s.io/StorageClass/_cluster/default", "AKS default StorageClass", match_type: "exact"),
-      argo_rule("aks-storageclass-managed", "storage.k8s.io/StorageClass/_cluster/managed*", "AKS Azure Disk StorageClasses"),
-      argo_rule("aks-storageclass-azurefile", "storage.k8s.io/StorageClass/_cluster/azurefile*", "AKS Azure Files StorageClasses"),
-      argo_rule("aks-csidrivers", "storage.k8s.io/CSIDriver/_cluster/*.csi.azure.com", "AKS CSI drivers")
+      *AKS_STORAGE_CLASSES.map do |name|
+        argo_rule("aks-storageclass-#{name}", "storage.k8s.io/StorageClass/_cluster/#{name}", "AKS built-in StorageClass", match_type: "exact")
+      end
     ].freeze
   }.freeze
 
