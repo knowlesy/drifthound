@@ -189,4 +189,17 @@ class NotificationTest < ActiveSupport::TestCase
     assert_not drift_detected.resolution?
     assert_not error_detected.resolution?
   end
+
+  test "details include unmanaged resources in the change summary" do
+    check = @environment.drift_checks.create!(status: :drift, source: "azure", unmanaged_count: 3, unmanaged_ignored_count: 0)
+    notification = Notification.new(
+      environment: @environment,
+      event_type: :drift_detected,
+      old_status: "ok",
+      new_status: "drift",
+      drift_check: check
+    )
+
+    assert_equal "3 unmanaged", notification.details[:changes]
+  end
 end

@@ -40,7 +40,7 @@
           </span>
           <span class="col-counts">
             <% if check %>
-              <%= check.add_count.to_i %> / <%= check.change_count.to_i %> / <%= check.destroy_count.to_i %>
+              <%= check.add_count.to_i %> / <%= check.change_count.to_i %> / <%= check.destroy_count.to_i %><% if check.unmanaged_count.to_i > 0 %> · <%= check.unmanaged_count %> unmanaged<% end %>
             <% else %>
               —
             <% end %>

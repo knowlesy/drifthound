@@ -92,10 +92,7 @@
                 <% if last_check.ok? %>
                   No changes
                 <% elsif last_check.drift? || last_check.error? %>
-                  <% parts = [] %>
-                  <% parts << "#{last_check.add_count} to add" if last_check.add_count.to_i > 0 %>
-                  <% parts << "#{last_check.change_count} to change" if last_check.change_count.to_i > 0 %>
-                  <% parts << "#{last_check.destroy_count} to destroy" if last_check.destroy_count.to_i > 0 %>
+                  <% parts = last_check.summary_parts %>
                   <%= parts.any? ? parts.join(", ") : "—" %>
                 <% else %>
                   —

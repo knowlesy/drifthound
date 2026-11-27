@@ -112,4 +112,13 @@ class EnvironmentOverviewsControllerTest < ActionDispatch::IntegrationTest
 
     assert_response :success
   end
+
+  test "shows the unmanaged count next to the plan counts" do
+    @network_env.drift_checks.create!(status: :drift, source: "azure", unmanaged_count: 7, unmanaged_ignored_count: 0)
+
+    get environment_overview_path("overview-prod")
+
+    assert_response :success
+    assert_select ".project-env-row .col-counts", text: /0 \/ 0 \/ 0 · 7 unmanaged/
+  end
 end

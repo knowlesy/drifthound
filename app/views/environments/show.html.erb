@@ -153,16 +153,16 @@
                 <% if check.ok? %>
                   No changes
                 <% elsif check.drift? || check.error? %>
-                  <% parts = [] %>
-                  <% parts << "#{check.add_count} to add" if check.add_count.to_i > 0 %>
-                  <% parts << "#{check.change_count} to change" if check.change_count.to_i > 0 %>
-                  <% parts << "#{check.destroy_count} to destroy" if check.destroy_count.to_i > 0 %>
+                  <% parts = check.summary_parts %>
                   <%= parts.any? ? parts.join(", ") : "—" %>
                 <% else %>
                   —
                 <% end %>
                 <% if check.branch.present? %>
                   <span class="check-branch" title="Branch"><%= check.branch %></span>
+                <% end %>
+                <% unless check.source_terraform? %>
+                  <span class="badge badge-info" title="Check source"><%= check.source %></span>
                 <% end %>
               </span>
               <span class="col-duration">
