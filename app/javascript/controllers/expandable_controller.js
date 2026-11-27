@@ -10,5 +10,6 @@ export default class extends Controller {
     const isHidden = this.contentTarget.hidden
     this.contentTarget.hidden = !isHidden
     this.element.classList.toggle("expanded", isHidden)
+    if (this.hasButtonTarget) this.buttonTarget.setAttribute("aria-expanded", String(isHidden))
   }
 }

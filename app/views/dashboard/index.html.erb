@@ -38,6 +38,13 @@
         <button id="clear-filters" class="filter-clear" title="Clear filters" style="display:none;" data-dashboard-filter-target="clearBtn">✕</button>
       </span>
       <span class="filter-sep"></span>
+      <% if @project_environments.any? %>
+        <!-- Grouping toggle (project-first or environment-first table) -->
+        <div class="view-toggle group-toggle" role="group" aria-label="Group rows by">
+          <button type="button" class="view-toggle-btn active" data-group="project" aria-pressed="true" data-action="click->dashboard-filter#toggleGrouping" data-dashboard-filter-target="groupToggle">By <%= project_label %></button>
+          <button type="button" class="view-toggle-btn" data-group="environment" aria-pressed="false" data-action="click->dashboard-filter#toggleGrouping" data-dashboard-filter-target="groupToggle">By Environment</button>
+        </div>
+      <% end %>
       <!-- View toggle -->
       <div class="view-toggle">
         <button type="button" class="view-toggle-btn" data-view="table" data-action="click->dashboard-filter#toggleView" data-dashboard-filter-target="viewToggle" title="Table view">
@@ -313,7 +320,7 @@
         <p class="hint"><%= project_label(plural: true) %> and environments are created automatically when you submit your first drift check via the API.</p>
       </div>
     <% else %>
-      <div class="projects-table" id="projects-table">
+      <div class="projects-table" id="projects-table" data-dashboard-filter-target="projectTable">
         <div class="project-envs-header">
           <span><%= project_label %></span>
           <span>Environment</span>
@@ -339,6 +346,7 @@
             <% end %>
           <% end %>
       </div>
+      <%= render "dashboard/environment_rollups", rollups: @environment_rollups %>
     <% end %>
   </section>
 </div>
