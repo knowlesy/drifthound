@@ -12,6 +12,20 @@ module ArgoCliFixtures
     vct_names claim_ns claim_name type
   ].freeze
 
+  # Columns that are only printed for the kinds that need them
+  ARGO_KIND_COLUMNS = { "statefulsets.apps" => %i[vct_names], "persistentvolumes" => %i[claim_ns claim_name], "secrets" => %i[type] }.freeze
+  ARGO_KIND_ONLY = %i[vct_names claim_ns claim_name type].freeze
+
+  # What kubectl prints for a resource: the full row cut down to that kind's columns
+  def argo_project(resource, rows)
+    keep = ARGO_COLUMNS.each_index.select { |i| !ARGO_KIND_ONLY.include?(ARGO_COLUMNS[i]) || Array(ARGO_KIND_COLUMNS[resource]).include?(ARGO_COLUMNS[i]) }
+    rows.each_line.map { |line| "#{line.chomp.split("\t", -1).values_at(*keep).join("\t")}\n" }.join
+  end
+
+  def argo_resource_for(kind)
+    { "StatefulSet" => "statefulsets.apps", "PersistentVolume" => "persistentvolumes", "Secret" => "secrets" }.fetch(kind, "pods")
+  end
+
   def argo_fixture(name)
     File.read(FIXTURE_DIR.join(name))
   end
@@ -34,7 +48,8 @@ module ArgoCliFixtures
   end
 
   def argo_kube(api_version, kind, namespace, name, **attrs)
-    DriftHoundCli::Argo.parse_lines(argo_obj(api_version, kind, namespace, name, **attrs), kind).sole
+    resource = argo_resource_for(kind)
+    DriftHoundCli::Argo.parse_lines(argo_project(resource, argo_obj(api_version, kind, namespace, name, **attrs)), resource).sole
   end
 
   def argo_apps(file = "applications.json", destinations: DriftHoundCli::Modes::ArgoUnowned::DEFAULT_DESTINATIONS, namespaces: [ "argocd" ])
@@ -145,7 +160,7 @@ module ArgoCliFixtures
       if stderr
         [ "", stderr, code || 1 ]
       else
-        [ world.fetch(resource) { raise "no fixture for #{resource}" }, "", 0 ]
+        [ argo_project(resource, world.fetch(resource) { raise "no fixture for #{resource}" }), "", 0 ]
       end
     end
   end

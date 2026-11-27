@@ -257,8 +257,9 @@ class ArgoUnownedTest < ActiveSupport::TestCase
 
     assert_equal "helm.sh/release.v1", secret[:metadata][:secret_type]
     assert_equal "Secret", secret[:resource_type]
-    projection = get_calls(runner).map { |cmd| cmd.find { |arg| arg.start_with?("jsonpath=") } }.uniq.sole
-    assert_no_match(/\.data|stringData/, projection)
+    projections = get_calls(runner).map { |cmd| cmd.find { |arg| arg.start_with?("jsonpath=") } }
+    assert(projections.any? { |t| t.include?("{.type}") })
+    projections.each { |t| assert_no_match(/\.data|stringData/, t) }
     assert_no_match(/"data"/, payload.to_json)
   end
 

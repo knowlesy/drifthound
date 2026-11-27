@@ -601,7 +601,19 @@ module DriftHoundCli
       [ :claim_name, '.spec.claimRef.name' ],
       [ :type, '.type' ]
     ].freeze
-    COLUMN_COUNT = COLUMNS.size
+
+    # These columns are read only for the kinds that need them. A custom resource can hold any
+    # text in a field such as .type, and a tab or newline there would break the row.
+    KIND_COLUMNS = {
+      'statefulsets.apps' => %i[vct_names],
+      'persistentvolumes' => %i[claim_ns claim_name],
+      'secrets' => %i[type]
+    }.freeze
+    KIND_ONLY = KIND_COLUMNS.values.flatten.freeze
+
+    def self.columns_for(resource)
+      COLUMNS.reject { |member, _| KIND_ONLY.include?(member) && !Array(KIND_COLUMNS[resource]).include?(member) }
+    end
 
     KubeObject = Struct.new(*COLUMNS.map(&:first), keyword_init: true) do
       def group
@@ -626,8 +638,8 @@ module DriftHoundCli
       key.gsub('.') { '\\.' }
     end
 
-    def self.template(instance_label_key = DEFAULT_INSTANCE_LABEL)
-      paths = COLUMNS.map do |member, path|
+    def self.template(instance_label_key = DEFAULT_INSTANCE_LABEL, resource = nil)
+      paths = columns_for(resource).map do |member, path|
         member == :instance_label ? ".metadata.labels.#{jsonpath_key(instance_label_key)}" : path
       end
       '{range .items[*]}' + paths.map { |path| "{#{path}}" }.join('{"\t"}') + '{"\n"}{end}'
@@ -646,11 +658,14 @@ module DriftHoundCli
         next if line.strip.empty?
 
         columns = line.split("\t", -1)
-        unless columns.size == COLUMN_COUNT
-          raise ArgoError, "unexpected output from kubectl get #{resource}: line #{index + 1} has #{columns.size} columns, expected #{COLUMN_COUNT}"
+        members = columns_for(resource).map(&:first)
+        unless columns.size == members.size
+          raise ArgoError, "unexpected output from kubectl get #{resource}: line #{index + 1} has #{columns.size} columns, expected #{members.size}. " \
+                           "An object of #{resource} may hold a tab or newline in a printed field. Skip the kind with --exclude-kind=#{resource} if you do not need it"
         end
 
-        object = KubeObject.new(**COLUMNS.map(&:first).zip(columns).to_h)
+        values = COLUMNS.each_with_object({}) { |(member, _), hash| hash[member] = '' }
+        object = KubeObject.new(**values.merge(members.zip(columns).to_h))
         raise ArgoError, "kubectl did not report kind for #{resource}" if object.kind.empty?
         raise ArgoError, "kubectl did not report a name and uid for an object of #{resource}" if object.name.empty? || object.uid.empty?
 
@@ -697,11 +712,15 @@ module DriftHoundCli
         [ names, [ "kubectl api-resources reported errors for #{groups.join(', ')}; those groups are not scanned" ] ]
       end
 
-      # Only a partial-discovery error is tolerated, and only when it names groups we skip anyway
+      # Only a partial-discovery error is tolerated. Every failing group/version token is read,
+      # including dotless groups (apps/v1) and the core group (v1), so none is dropped silently.
       def failing_groups(stderr)
-        return [] unless stderr.include?('unable to retrieve the complete list of server APIs')
+        phrase = 'unable to retrieve the complete list of server APIs'
+        return [] unless stderr.include?(phrase)
 
-        stderr.scan(%r{([a-z0-9][a-z0-9.-]*\.[a-z0-9.-]+)/v[0-9][a-z0-9]*}).flatten.uniq
+        tail = stderr[(stderr.index(phrase) + phrase.size)..-1]
+        tokens = tail.scan(%r{(?:\A|[:,]\s*)((?:[a-z0-9][a-z0-9.-]*/)?v[0-9]+[a-z0-9]*):}).flatten
+        tokens.map { |token| token.include?('/') ? token.split('/', 2).first : '' }.uniq
       end
 
       def list(resource, namespaced, chunk_size, template)
@@ -729,7 +748,7 @@ module DriftHoundCli
         @kubectl = kubectl
         @concurrency = concurrency
         @chunk_size = chunk_size
-        @template = Argo.template(instance_label_key)
+        @instance_label_key = instance_label_key
         @include_secrets = include_secrets
         @exclude_kinds = exclude_kinds
       end
@@ -752,22 +771,34 @@ module DriftHoundCli
 
       private
 
-      # Core group first, then the other groups alphabetically, so uid de-duplication is stable
+      RESOURCE_NAME = /\A[a-z0-9][a-z0-9.-]*\z/.freeze
+
+      # Core group first, then the other groups alphabetically, so uid de-duplication is stable.
+      # A name that is not a plain resource name is never passed to kubectl, and is fatal.
       def plan(entries)
+        entries = entries.uniq
+        bad = entries.map(&:first).reject { |name| RESOURCE_NAME.match?(name) }
+        raise ArgoError, "kubectl api-resources returned names that are not valid resource names, so the scan would be incomplete: #{bad.first(5).map(&:inspect).join(', ')}" unless bad.empty?
+
         denied = 0
         excluded = 0
         targets = []
-        entries.uniq.sort_by { |name, _| [ name.include?('.') ? 1 : 0, name ] }.each do |name, namespaced|
+        entries.sort_by { |name, _| [ name.include?('.') ? 1 : 0, name ] }.each do |name, namespaced|
           group = name.split('.', 2)[1]
           if GROUP_DENYLIST.include?(group) || KIND_DENYLIST.include?(name) || (name == SECRETS && !@include_secrets)
             denied += 1
-          elsif @exclude_kinds.include?(name)
+          elsif excluded?(name)
             excluded += 1
           else
             targets << [ name, namespaced ]
           end
         end
         [ targets, denied, excluded ]
+      end
+
+      # A name without a group (deployments) excludes that resource in every group
+      def excluded?(name)
+        @exclude_kinds.any? { |kind| kind == name || (!kind.include?('.') && name.split('.', 2).first == kind) }
       end
 
       def fetch_all(targets)
@@ -794,7 +825,7 @@ module DriftHoundCli
       end
 
       def fetch(name, namespaced)
-        out, err, status = @kubectl.list(name, namespaced, @chunk_size, @template)
+        out, err, status = @kubectl.list(name, namespaced, @chunk_size, Argo.template(@instance_label_key, name))
         unless status.success?
           problem = case err
                     when /forbidden/i then :forbidden
@@ -1201,7 +1232,7 @@ module DriftHoundCli
         parser.on('--argocd-installation-id=ID', 'Only count objects carrying this Argo CD installation ID (argocd tool)') { |v| opts[:argo_installation_id] = v }
         parser.on('--include-secrets', 'Also list Secrets (names and types only, argocd tool)') { opts[:include_secrets] = true }
         parser.on('--include-platform-managed', 'Also report objects managed by AKS or Kubernetes itself (argocd tool)') { opts[:include_platform_managed] = true }
-        parser.on('--exclude-kind=RESOURCE', 'kubectl resource name to skip, such as foos.example.com (repeatable, argocd tool)') { |v| (opts[:exclude_kinds] ||= []) << v }
+        parser.on('--exclude-kind=RESOURCE', 'kubectl resource name to skip, such as foos.example.com; without a group it matches every group (repeatable, argocd tool)') { |v| (opts[:exclude_kinds] ||= []) << v }
         parser.on('--chunk-size=N', Integer, 'kubectl get --chunk-size (default 500, argocd tool)') { |v| opts[:chunk_size] = v }
         parser.on('--request-timeout=DURATION', 'kubectl --request-timeout (default 120s, argocd tool)') { |v| opts[:request_timeout] = v }
         parser.on('--concurrency=N', Integer, 'Parallel kubectl calls (default 4, argocd tool)') { |v| opts[:concurrency] = v }

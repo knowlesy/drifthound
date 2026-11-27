@@ -21,7 +21,7 @@ class ArgoInventoryTest < ActiveSupport::TestCase
 
   test "the column list matches the order the fixtures are written in" do
     assert_equal ARGO_COLUMNS, Argo::COLUMNS.map(&:first)
-    assert_equal 24, Argo::COLUMN_COUNT
+    assert_equal 24, Argo::COLUMNS.size
   end
 
   test "the jsonpath template escapes dots in map keys" do
@@ -32,7 +32,17 @@ class ArgoInventoryTest < ActiveSupport::TestCase
     assert_includes template, '{.metadata.labels.app\.kubernetes\.io/instance}'
     assert template.start_with?("{range .items[*]}")
     assert template.end_with?('{"\n"}{end}')
-    assert_equal 24, template.scan('{"\t"}').size + 1
+    assert_equal 20, template.scan('{"\t"}').size + 1
+    assert_no_match(/\.type|claimRef|volumeClaimTemplates/, template)
+  end
+
+  test "the extra columns are only requested for the kinds that need them" do
+    assert_includes Argo.template(Argo::DEFAULT_INSTANCE_LABEL, "secrets"), "{.type}"
+    assert_includes Argo.template(Argo::DEFAULT_INSTANCE_LABEL, "persistentvolumes"), "{.spec.claimRef.name}"
+    assert_includes Argo.template(Argo::DEFAULT_INSTANCE_LABEL, "statefulsets.apps"), "{.spec.volumeClaimTemplates[*].metadata.name}"
+    assert_no_match(/\.type|claimRef|volumeClaimTemplates/, Argo.template(Argo::DEFAULT_INSTANCE_LABEL, "widgets.example.com"))
+    assert_equal 21, Argo.template(Argo::DEFAULT_INSTANCE_LABEL, "secrets").scan('{"\t"}').size + 1
+    assert_equal 22, Argo.template(Argo::DEFAULT_INSTANCE_LABEL, "persistentvolumes").scan('{"\t"}').size + 1
   end
 
   test "a custom instance label key is escaped and put in the instance column" do
@@ -51,10 +61,10 @@ class ArgoInventoryTest < ActiveSupport::TestCase
 
   test "parses a literal row in the documented column order" do
     cols = [ "apps/v1", "Deployment", "shop", "web", "u1", "2026-01-01T00:00:00Z", "o1 o2", "web:apps/Deployment:shop/web", "inst", "rel", "relns",
-             "prov", "web", "Helm", "web", "part", "chart-1", "aks", "Reconcile", "rbac-defaults", "data logs", "cns", "cname", "" ]
+             "prov", "web", "Helm", "web", "part", "chart-1", "aks", "Reconcile", "rbac-defaults", "data logs" ]
     line = cols.join("\t")
 
-    object = Argo.parse_lines("#{line}\n", "deployments.apps").sole
+    object = Argo.parse_lines("#{line}\n", "statefulsets.apps").sole
 
     assert_equal "apps", object.group
     assert_equal %w[o1 o2], object.owner_uids
@@ -65,11 +75,11 @@ class ArgoInventoryTest < ActiveSupport::TestCase
     assert_equal "Helm", object.managed_by
     assert_equal "rbac-defaults", object.bootstrapping
     assert_equal %w[data logs], object.vct_names.split
-    assert_equal "cname", object.claim_name
+    assert_equal "", object.claim_name
   end
 
   test "an empty owner column gives no owners and a core apiVersion gives no group" do
-    object = Argo.parse_lines(argo_obj("v1", "Pod", "default", "naked"), "pods").sole
+    object = argo_kube("v1", "Pod", "default", "naked")
 
     assert_equal [], object.owner_uids
     assert_equal "", object.group
@@ -77,21 +87,21 @@ class ArgoInventoryTest < ActiveSupport::TestCase
   end
 
   test "a line with the wrong number of columns is fatal" do
-    line = argo_obj("v1", "Pod", "default", "naked").chomp.split("\t", -1).first(23).join("\t")
+    line = argo_project("pods", argo_obj("v1", "Pod", "default", "naked")).chomp.split("\t", -1).first(19).join("\t")
 
     error = assert_raises(DriftHoundCli::ArgoError) { Argo.parse_lines(line, "pods") }
-    assert_match(/23 columns, expected 24/, error.message)
+    assert_match(/19 columns, expected 20.*--exclude-kind=pods/, error.message)
   end
 
   test "an empty kind, name or uid is fatal" do
-    assert_raises(DriftHoundCli::ArgoError) { Argo.parse_lines(argo_row(api_version: "v1", name: "x", uid: "u"), "pods") }
-    assert_raises(DriftHoundCli::ArgoError) { Argo.parse_lines(argo_row(api_version: "v1", kind: "Pod", uid: "u"), "pods") }
-    assert_raises(DriftHoundCli::ArgoError) { Argo.parse_lines(argo_row(api_version: "v1", kind: "Pod", name: "x"), "pods") }
+    assert_raises(DriftHoundCli::ArgoError) { Argo.parse_lines(argo_project("pods", argo_row(api_version: "v1", name: "x", uid: "u")), "pods") }
+    assert_raises(DriftHoundCli::ArgoError) { Argo.parse_lines(argo_project("pods", argo_row(api_version: "v1", kind: "Pod", uid: "u")), "pods") }
+    assert_raises(DriftHoundCli::ArgoError) { Argo.parse_lines(argo_project("pods", argo_row(api_version: "v1", kind: "Pod", name: "x")), "pods") }
   end
 
   test "only Secrets expose a type" do
-    assert_equal "helm.sh/release.v1", Argo.parse_lines(argo_obj("v1", "Secret", "a", "b", type: "helm.sh/release.v1"), "secrets").sole.secret_type
-    assert_equal "", Argo.parse_lines(argo_obj("v1", "Service", "a", "b", type: "ClusterIP"), "services").sole.secret_type
+    assert_equal "helm.sh/release.v1", argo_kube("v1", "Secret", "a", "b", type: "helm.sh/release.v1").secret_type
+    assert_equal "", argo_kube("v1", "Service", "a", "b").secret_type
   end
 
   test "builds kubectl commands with flags, never environment variables" do
@@ -104,7 +114,7 @@ class ArgoInventoryTest < ActiveSupport::TestCase
                    "api-resources", "--verbs=list", "--namespaced=false", "-o", "name" ], runner.commands[1]
     pods = get_calls(runner).find { |cmd| cmd[cmd.index("get") + 1] == "pods" }
     assert_equal [ "/opt/kubectl", "--kubeconfig", "/k/config", "--context", "prod-aks", "--request-timeout", "30s",
-                   "get", "pods", "--all-namespaces", "--chunk-size", "100", "-o", "jsonpath=#{Argo.template}" ], pods
+                   "get", "pods", "--all-namespaces", "--chunk-size", "100", "-o", "jsonpath=#{Argo.template(Argo::DEFAULT_INSTANCE_LABEL, "pods")}" ], pods
     namespaces = get_calls(runner).find { |cmd| cmd[cmd.index("get") + 1] == "namespaces" }
     assert_not_includes namespaces, "--all-namespaces"
     assert_equal({ cmd: pods, chdir: nil, merge_stderr: false }, runner.calls.find { |call| call[:cmd] == pods })
@@ -274,5 +284,84 @@ class ArgoInventoryTest < ActiveSupport::TestCase
 
   test "argocd-context with a destination is accepted" do
     assert_nothing_raised { mode(argocd_context: "hub", argo_destinations: [ "prod-aks" ]) }
+  end
+
+  def discovery_runner(stderr, namespaced: argo_fixture("api_resources_namespaced.txt"))
+    runner = FakeRunner.new
+    runner.on(->(cmd) { cmd.include?("--namespaced=true") }, stdout: namespaced, stderr: stderr, exit: 1)
+    stub_kubectl(runner)
+    runner
+  end
+
+  test "partial discovery that includes a dotless group is fatal" do
+    stderr = "error: unable to retrieve the complete list of server APIs: apps/v1: the server is currently unable to handle the request, " \
+             "metrics.k8s.io/v1beta1: stale GroupVersion discovery: metrics.k8s.io/v1beta1"
+
+    error = assert_raises(DriftHoundCli::ArgoError) { inventory(discovery_runner(stderr)).collect }
+
+    assert_match(/api-resources failed/, error.message)
+  end
+
+  test "partial discovery of the core group or another dotless group is fatal" do
+    %w[v1 batch/v1 policy/v1 autoscaling/v2].each do |token|
+      stderr = "error: unable to retrieve the complete list of server APIs: #{token}: the server is currently unable to handle the request"
+
+      assert_raises(DriftHoundCli::ArgoError, token) { inventory(discovery_runner(stderr)).collect }
+    end
+  end
+
+  test "partial discovery of the metrics group alone is tolerated" do
+    stderr = "error: unable to retrieve the complete list of server APIs: metrics.k8s.io/v1beta1: stale GroupVersion discovery: metrics.k8s.io/v1beta1"
+
+    result = inventory(discovery_runner(stderr)).collect
+
+    assert_match(/metrics\.k8s\.io/, result.notes.first)
+    assert_equal 18, result.listed
+  end
+
+  test "several denied groups are tolerated together" do
+    stderr = "error: unable to retrieve the complete list of server APIs: custom.metrics.k8s.io/v1beta1: x, external.metrics.k8s.io/v1beta1: y, metrics.k8s.io/v1beta1: z"
+
+    assert_equal 18, inventory(discovery_runner(stderr)).collect.listed
+  end
+
+  test "a tab in a custom resource field fails closed and names the kind" do
+    row = argo_project("widgets.example.com", argo_obj("example.com/v1", "Widget", "shop", "w1")).sub("w1", "w\t1")
+    namespaced = "#{argo_fixture('api_resources_namespaced.txt')}widgets.example.com\n"
+    runner = FakeRunner.new
+    runner.on(->(cmd) { cmd.include?("get") && cmd.include?("widgets.example.com") }, stdout: row)
+    stub_kubectl(runner, world: argo_world, namespaced: namespaced)
+
+    error = assert_raises(DriftHoundCli::ArgoError) { inventory(runner).collect }
+
+    assert_match(/kubectl get widgets\.example\.com/, error.message)
+    assert_match(/--exclude-kind=widgets\.example\.com/, error.message)
+  end
+
+  test "a custom resource with a tab in its type is not affected, because .type is not requested for it" do
+    runner = argo_runner
+    inventory(runner).collect
+
+    custom = get_calls(runner).find { |cmd| cmd[cmd.index("get") + 1] == "applications.argoproj.io" }
+    assert_no_match(/\{\.type\}/, custom.last)
+  end
+
+  test "resource names that are not plain names are never passed to kubectl and are fatal" do
+    runner = FakeRunner.new
+    stub_kubectl(runner, namespaced: "#{argo_fixture('api_resources_namespaced.txt')}--all\nfoo bar\nUpper\n")
+
+    error = assert_raises(DriftHoundCli::ArgoError) { inventory(runner).collect }
+
+    assert_match(/not valid resource names/, error.message)
+    assert_includes error.message, '"--all"'
+    assert_empty get_calls(runner)
+  end
+
+  test "a bare exclude-kind matches that resource in every group" do
+    runner = argo_runner
+    result = inventory(runner, exclude_kinds: %w[deployments]).collect
+
+    assert_not_includes listed_resources(runner), "deployments.apps"
+    assert_equal 1, result.excluded
   end
 end
