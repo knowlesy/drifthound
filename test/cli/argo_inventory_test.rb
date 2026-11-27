@@ -107,7 +107,7 @@ class ArgoInventoryTest < ActiveSupport::TestCase
                    "get", "pods", "--all-namespaces", "--chunk-size", "100", "-o", "jsonpath=#{Argo.template}" ], pods
     namespaces = get_calls(runner).find { |cmd| cmd[cmd.index("get") + 1] == "namespaces" }
     assert_not_includes namespaces, "--all-namespaces"
-    assert_equal({ cmd: pods, chdir: nil }, runner.calls.find { |call| call[:cmd] == pods })
+    assert_equal({ cmd: pods, chdir: nil, merge_stderr: false }, runner.calls.find { |call| call[:cmd] == pods })
   end
 
   test "omits context and kubeconfig when not given" do
