@@ -63,6 +63,29 @@ docker-oidc-start:
 docker-oidc-stop:
 	@$(OIDC_COMPOSE) down
 
+# Prometheus and Grafana next to the app (see docker-compose.monitoring.yml).
+# Run docker-setup-demo (or docker-setup) once first to create the database.
+MONITORING_COMPOSE = docker compose -f docker-compose.yml -f docker-compose.monitoring.yml
+MONITORING_TOKEN = dev/monitoring/.token
+
+docker-monitoring-start:
+	@$(MONITORING_COMPOSE) build app
+	@$(MONITORING_COMPOSE) up -d postgres app
+	@echo "Waiting for app..."
+	@until curl -sf http://localhost:3000/up > /dev/null 2>&1; do sleep 1; done
+	@$(MONITORING_COMPOSE) exec -T app bin/rails api_tokens:monitoring_token > $(MONITORING_TOKEN).tmp \
+		&& grep -Eq '^[A-Za-z0-9]+$$' $(MONITORING_TOKEN).tmp \
+		&& mv $(MONITORING_TOKEN).tmp $(MONITORING_TOKEN) \
+		|| { rm -f $(MONITORING_TOKEN).tmp; echo "Could not create the scrape token"; exit 1; }
+	@$(MONITORING_COMPOSE) up -d prometheus grafana
+	@echo "Waiting for Grafana..."
+	@until curl -sf http://localhost:3001/api/health > /dev/null 2>&1; do sleep 1; done
+	@echo "Ready: Grafana at http://localhost:3001 (DriftHound dashboard), Prometheus at http://localhost:9090"
+	@echo "The read API token for the scrape is in $(MONITORING_TOKEN) (git-ignored)."
+
+docker-monitoring-stop:
+	@$(MONITORING_COMPOSE) down
+
 # ── Testing ───────────────────────────────────────────────────────────────────
 
 prepare-test-db:
