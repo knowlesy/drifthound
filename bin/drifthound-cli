@@ -885,6 +885,7 @@ module DriftHoundCli
         @cluster_keys = Set.new
         @in_scope_count = 0
         seen = Set.new
+        @namespaced_apps = []
 
         items.each do |app|
           destination = dig(app, 'spec', 'destination')
@@ -897,6 +898,7 @@ module DriftHoundCli
           add_application(app, destination, argo_namespaces)
         end
 
+        add_unambiguous_bare_names(items)
         raise ArgoError, 'no Argo CD Applications were found (are the Argo CD CRDs installed in this cluster?)' if items.empty?
         raise ArgoError, "no Argo CD Application deploys to #{destinations.join(' or ')}; Applications target: #{seen.to_a.sort.join(', ')}" if @in_scope_count.zero?
       end
@@ -932,12 +934,28 @@ module DriftHoundCli
         value.is_a?(Hash) ? value : {}
       end
 
+      # Argo CD names an application <namespace>_<name> in tracking markers unless its namespace is the
+      # control plane's. With a control plane namespace that was not given (--argocd-namespace), the
+      # markers carry the bare name, so a bare name is accepted when only one application has it.
+      def add_unambiguous_bare_names(_items)
+        counts = Hash.new(0)
+        @namespaced_apps.each { |name, _instance| counts[name] += 1 }
+        @bare_counts = counts
+        @namespaced_apps.each do |name, instance|
+          next if name == instance || counts[name] != 1 || @instance_names.include?(name)
+
+          @instance_names << name
+          @label_values << self.class.label_value(name)
+        end
+      end
+
       def add_application(app, destination, argo_namespaces)
         meta = dig(app, 'metadata')
         namespace = meta['namespace'].to_s
         name = meta['name'].to_s
         instance = namespace.empty? || argo_namespaces.include?(namespace) ? name : "#{namespace}_#{name}"
         @instance_names << instance
+        @namespaced_apps << [ name, instance ]
         @label_values << self.class.label_value(instance)
         @destination_namespaces << destination['namespace'].to_s unless destination['namespace'].to_s.empty?
 
@@ -1024,7 +1042,7 @@ module DriftHoundCli
       BUCKETS = %i[duplicate dependent tracked listed app_namespace control_plane platform derived_storage unowned].freeze
       MAX_OWNER_DEPTH = 10
       Entry = Struct.new(:object, :reason, :dependents)
-      Result = Struct.new(:entries, :counts, :owner_not_listed, :group_mismatches)
+      Result = Struct.new(:entries, :counts, :owner_not_listed, :group_mismatches, :markers, :unknown_markers)
 
       def initialize(objects, apps:, method:, installation_id:, argo_namespaces:, include_platform_managed:)
         @apps = apps
@@ -1038,6 +1056,8 @@ module DriftHoundCli
         @dependents = Hash.new(0)
         @owner_not_listed = 0
         @group_mismatches = 0
+        @markers = 0
+        @unknown_markers = 0
         index_namespaces
         index_stateful_sets
       end
@@ -1050,7 +1070,7 @@ module DriftHoundCli
           @counts[bucket] += 1
           entries << Entry.new(object, reason, @dependents[object.uid]) if bucket == :unowned
         end
-        Result.new(entries, @counts, @owner_not_listed, @group_mismatches)
+        Result.new(entries, @counts, @owner_not_listed, @group_mismatches, @markers, @unknown_markers)
       end
 
       private
@@ -1109,6 +1129,7 @@ module DriftHoundCli
         return [ :dependent, nil ] if dependent?(object)
 
         verdict = Tracking.owner(object, apps: @apps, method: @method, installation_id: @installation_id)
+        count_marker(verdict)
         if verdict.owned?
           @group_mismatches += 1 if verdict.group_mismatch
           return [ :tracked, nil ]
@@ -1120,6 +1141,14 @@ module DriftHoundCli
         return [ :derived_storage, nil ] if derived_storage?(object)
 
         [ :unowned, verdict.reason ]
+      end
+
+      # Tracking markers that are well formed and self-referenced, and how many name an unknown application
+      def count_marker(verdict)
+        return if @method == 'label' || !(verdict.owned? || verdict.reason == 'unknown-application')
+
+        @markers += 1
+        @unknown_markers += 1 unless verdict.owned?
       end
 
       def namespace_object?(object)
@@ -1158,6 +1187,8 @@ module DriftHoundCli
     # Turns a classified object into the API's item
     module Items
       METADATA_LIMIT_BYTES = 1800
+      VALUE_LIMIT = 200
+      DROP_ORDER = %i[labels tracking_id helm_chart helm_release_namespace helm_release secret_type managed_by].freeze
       IDENTIFIER_LIMIT = 1024
       FIELD_LIMITS = { resource_type: 255, name: 255, scope: 255, location: 128 }.freeze
 
@@ -1200,12 +1231,31 @@ module DriftHoundCli
           labels: labels.empty? ? nil : labels
         }
         data = data.reject { |_key, value| value.nil? || value == '' }
-        data = data.transform_values { |value| value.is_a?(String) ? clean(value) : value }
-        return data if data.to_json.bytesize <= METADATA_LIMIT_BYTES
+        clamped = false
+        data = data.each_with_object({}) do |(key, value), hash|
+          if value.is_a?(Hash)
+            value = value.each_with_object({}) do |(k, v), labels|
+              clamped ||= clamp?(v) || clamp?(k)
+              labels[clean(k)[0, VALUE_LIMIT]] = clean(v)[0, VALUE_LIMIT]
+            end
+          elsif value.is_a?(String)
+            clamped ||= clamp?(value)
+            value = clean(value)[0, VALUE_LIMIT]
+          end
+          hash[key] = value
+        end
+        # The server measures JSON.generate, so this does too
+        DROP_ORDER.each do |key|
+          break if JSON.generate(data).bytesize <= METADATA_LIMIT_BYTES
 
-        data = data.reject { |key, _| key == :labels }
-        data = data.reject { |key, _| key == :tracking_id } if data.to_json.bytesize > METADATA_LIMIT_BYTES
-        data.merge(truncated: true)
+          clamped = true
+          data = data.reject { |k, _| k == key }
+        end
+        clamped ? data.merge(truncated: true) : data
+      end
+
+      def self.clamp?(value)
+        value.is_a?(String) && value.length > VALUE_LIMIT
       end
     end
   end
@@ -1336,6 +1386,10 @@ module DriftHoundCli
         classified = Argo::Classifier.new(result.objects, apps: apps, method: @tracking_method, installation_id: @opts[:argo_installation_id],
                                                           argo_namespaces: @argo_namespaces,
                                                           include_platform_managed: @opts[:include_platform_managed] ? true : false).call
+        if classified.markers.positive? && classified.unknown_markers * 2 > classified.markers
+          raise ArgoError, "#{classified.unknown_markers} of #{classified.markers} Argo CD tracking markers name applications that are not in scope, " \
+                           'so ownership cannot be judged. Check --argocd-namespace (the control plane namespace), --argocd-destination, --argocd-installation-id and the context'
+        end
         skipped_long = 0
         unowned = classified.entries.each_with_object([]) do |entry, list|
           item = Argo::Items.to_item(entry, cluster, @instance_label_key)

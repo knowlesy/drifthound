@@ -185,19 +185,32 @@ class ArgoUnownedTest < ActiveSupport::TestCase
     assert_equal 128, payload[:unmanaged_resources].first[:location].length
   end
 
-  test "metadata over the size guard drops labels first, then the tracking id" do
-    long_labels = argo_obj("v1", "ConfigMap", "big", "mid", tracking_id: "x" * 1450, instance_label: "i" * 63, app_name: "n" * 63, part_of: "p" * 63)
-    huge = argo_obj("v1", "ConfigMap", "big", "huge", tracking_id: "y" * 1900, instance_label: "i")
-    payload, = payload_for({}, world: world_with("configmaps" => long_labels + huge))
+  test "long metadata strings are cut to 200 characters and marked" do
+    long = argo_obj("v1", "ConfigMap", "big", "amp", tracking_id: "&" * 1500, helm_release: "r" * 3000, helm_chart: "c" * 250,
+                    instance_label: "i" * 63, app_name: "n" * 63, part_of: "p" * 63)
+    payload, = payload_for({}, { world: world_with("configmaps" => long) })
 
-    mid = item(payload, "core/ConfigMap/big/mid")[:metadata]
-    assert mid[:truncated]
-    assert_not mid.key?(:labels)
-    assert_equal 1450, mid[:tracking_id].length
-    huge_meta = item(payload, "core/ConfigMap/big/huge")[:metadata]
-    assert huge_meta[:truncated]
-    assert_not huge_meta.key?(:tracking_id)
-    assert_operator huge_meta.to_json.bytesize, :<=, 1800
+    meta = item(payload, "core/ConfigMap/big/amp")[:metadata]
+    assert meta[:truncated]
+    assert_equal 200, meta[:tracking_id].length
+    assert_equal 200, meta[:helm_release].length
+    assert_equal 200, meta[:helm_chart].length
+    assert_equal 3, meta[:labels].size
+    assert_operator JSON.generate(meta).bytesize, :<=, 1800
+  end
+
+  test "short metadata is not marked truncated" do
+    assert_not item(payload_for.first, "apps/Deployment/shop/redis")[:metadata].key?(:truncated)
+  end
+
+  test "multibyte metadata stays within the byte budget" do
+    wide = argo_obj("v1", "ConfigMap", "big", "wide", tracking_id: "\u00e9" * 400, helm_release: "\u20ac" * 400, helm_chart: "\u{1F600}" * 400,
+                    helm_release_ns: "\u20ac" * 400, managed_by: "\u20ac" * 400)
+    payload, = payload_for({}, { world: world_with("configmaps" => wide) })
+
+    meta = item(payload, "core/ConfigMap/big/wide")[:metadata]
+    assert meta[:truncated]
+    assert_operator JSON.generate(meta).bytesize, :<=, 1800
   end
 
   test "NUL bytes are removed from strings sent to the server" do
@@ -292,5 +305,51 @@ class ArgoUnownedTest < ActiveSupport::TestCase
 
   test "concurrency does not change the result" do
     assert_equal identifiers(payload_for.first), identifiers(payload_for(concurrency: 4).first)
+  end
+
+  def gitops_apps
+    list = JSON.parse(argo_fixture("applications.json"))
+    list["items"] = list["items"].reject { |app| %w[team-a].include?(app["metadata"]["namespace"]) || app["metadata"]["name"] == "web2-remote" }
+    list["items"].each { |app| app["metadata"]["namespace"] = "gitops" }
+    JSON.generate(list)
+  end
+
+  test "applications in an unlisted control plane namespace are matched by their bare name" do
+    payload, = payload_for({}, { applications: gitops_apps })
+
+    assert_equal "ok", payload[:status]
+    assert_not_includes identifiers(payload), "core/ConfigMap/scratch/tracked"
+    assert_not_includes identifiers(payload), "argoproj.io/Application/argocd/web"
+  end
+
+  test "both the namespaced and the bare name are known when the bare name is unambiguous" do
+    apps = DriftHoundCli::Argo::Applications.parse(gitops_apps, destinations: %w[in-cluster https://kubernetes.default.svc], argo_namespaces: [ "argocd" ])
+
+    assert_equal Set.new(%w[gitops_root gitops_web gitops_widgets root web widgets]), apps.instance_names
+  end
+
+  test "an ambiguous bare name is not accepted" do
+    list = JSON.parse(gitops_apps)
+    list["items"] << JSON.parse(JSON.generate(list["items"].first)).tap { |app| app["metadata"]["namespace"] = "other" }
+    apps = DriftHoundCli::Argo::Applications.parse(JSON.generate(list), destinations: %w[https://kubernetes.default.svc], argo_namespaces: [ "argocd" ])
+
+    assert_includes apps.instance_names, "gitops_root"
+    assert_includes apps.instance_names, "other_root"
+    assert_not_includes apps.instance_names, "root"
+  end
+
+  test "more than half of the tracking markers naming unknown applications fails closed" do
+    world = argo_world.transform_values { |rows| rows.gsub(/\t(web|root|team-a_web):/, "\tstranger:") }
+
+    payload, = payload_for({}, { world: world })
+
+    assert_equal "error", payload[:status]
+    assert_match(/tracking markers name applications that are not in scope/, payload[:raw_output])
+    assert_match(/--argocd-namespace/, payload[:raw_output])
+    assert_not payload.key?(:unmanaged_resources)
+  end
+
+  test "a minority of stale markers is still reported" do
+    assert_equal "ok", payload_for.first[:status]
   end
 end

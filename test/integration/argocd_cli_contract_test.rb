@@ -103,4 +103,16 @@ class ArgocdCliContractTest < ActionDispatch::IntegrationTest
 
     assert_equal 11, response.parsed_body["unmanaged_count"]
   end
+
+  test "the server accepts metadata from long tracking ids and release names" do
+    rows = argo_obj("v1", "ConfigMap", "big", "amp", tracking_id: "&" * 1500, helm_release: "r" * 3000, instance_label: "i" * 63, app_name: "n" * 63, part_of: "p" * 63)
+    world = argo_world.merge("configmaps" => argo_world["configmaps"] + rows)
+
+    post_payload(payload_from_cli(world: world))
+
+    assert_response :created
+    row = DriftCheck.find(response.parsed_body["id"]).unmanaged_resources.find_by(name: "amp")
+    assert row.metadata["truncated"]
+    assert_operator JSON.generate(row.metadata).bytesize, :<=, UnmanagedResource::METADATA_MAX_BYTES
+  end
 end
