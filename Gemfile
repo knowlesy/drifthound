@@ -50,6 +50,9 @@ gem "omniauth", "~> 2.1"
 gem "omniauth_openid_connect", "~> 0.8"
 gem "omniauth-rails_csrf_protection", "~> 2.0"
 
+# Prometheus text exposition for /metrics [https://github.com/prometheus/client_ruby]
+gem "prometheus-client", "~> 5.0", require: "prometheus/client"
+
 group :development, :test do
   # See https://guides.rubyonrails.org/debugging_rails_applications.html#debugging-with-the-debug-gem
   gem "debug", platforms: %i[ mri mingw mswin x64_mingw ], require: "debug/prelude"
