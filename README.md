@@ -35,6 +35,7 @@ Live demo site: https://demo.drifthound.io
 - **Charts Dashboard**: Visual analytics with interactive charts for drift monitoring
 - **Dark Mode**: Switch between light and dark themes from the top nav; follows your OS setting until you choose
 - **Slack Notifications**: Real-time alerts when drift is detected or resolved
+- **Prometheus Metrics**: Optional `/metrics` endpoint for Prometheus and Grafana (see the [Configuration Guide](docs/configuration.md#prometheus-metrics))
 
 ## Requirements
 
@@ -112,6 +113,29 @@ The users and their claims live in `dev/oidc/mock-oauth2-server.json`. Add a blo
 
 > [!NOTE]
 > The mock provider shares the app container's network, so `http://localhost:8090` is the same address for your browser and for the app, and no `/etc/hosts` changes are needed. Plain `http` discovery is enabled only in development (`config/initializers/oidc_local_http.rb`).
+
+
+#### Trying Prometheus and Grafana Locally
+
+Runs Prometheus and Grafana next to the app, with a ready-made DriftHound dashboard and example alerts. Run `make docker-setup-demo` (or `make docker-setup`) once first to create the database.
+
+  ```bash
+  make docker-monitoring-start   # builds the app image, starts the app, Prometheus and Grafana
+  make docker-monitoring-stop
+  ```
+
+Open Grafana at http://localhost:3001 (anonymous viewer, DriftHound dashboard) or Prometheus at http://localhost:9090. The app exposes `/metrics` with `METRICS_ENABLED=true`. Prometheus scrapes it with a `read` API token that `make docker-monitoring-start` writes to `dev/monitoring/.token` (git-ignored, readable by your user and other local users, so use it for local development only).
+
+| File | Purpose |
+|------|---------|
+| `docker-compose.monitoring.yml` | Adds Prometheus and Grafana and turns on the metrics endpoint |
+| `dev/monitoring/prometheus.yml` | Scrape config |
+| `dev/monitoring/alerts.yml` | Example alert rules |
+| `dev/grafana/provisioning/` | Grafana data source and dashboard provider |
+| `dev/grafana/dashboards/drifthound.json` | The DriftHound dashboard |
+
+> [!NOTE]
+> This change adds the `prometheus-client` gem. If you already have a local image, run `docker compose build app` after pulling, or `make docker-start` fails with a missing gem error. `make docker-monitoring-start` builds the image itself.
 
 
 ## CLI Usage
