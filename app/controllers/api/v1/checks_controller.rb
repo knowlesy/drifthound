@@ -18,6 +18,8 @@ module Api
         cursor = parse_cursor
 
         scope = filtered_scope
+        source = source_param
+        scope = scope.where(source: source) if source
         scope = scope.where(created_at: since_time..) if since_time
         scope = scope.where(created_at: ...until_time) if until_time
         if cursor
@@ -84,6 +86,16 @@ module Api
         value
       end
 
+      def source_param
+        value = params[:source]
+        return nil if value.blank?
+        unless value.is_a?(String) && DriftCheck.sources.key?(value)
+          raise InvalidParameter, "source must be one of: #{DriftCheck.sources.keys.join(', ')}"
+        end
+
+        value
+      end
+
       def parse_limit
         return DEFAULT_LIMIT if params[:limit].blank?
 
@@ -131,6 +143,9 @@ module Api
           duration: check.duration,
           execution_number: check.execution_number,
           branch: check.branch,
+          source: check.source,
+          unmanaged_count: check.unmanaged_count,
+          unmanaged_ignored_count: check.unmanaged_ignored_count,
           created_at: check.created_at,
           change_summary: check.change_summary
         }

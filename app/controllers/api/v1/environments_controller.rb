@@ -92,6 +92,9 @@ module Api
           duration: check.duration,
           execution_number: check.execution_number,
           branch: check.branch,
+          source: check.source,
+          unmanaged_count: check.unmanaged_count,
+          unmanaged_ignored_count: check.unmanaged_ignored_count,
           created_at: check.created_at,
           change_summary: check.change_summary
         }
@@ -105,10 +108,17 @@ module Api
 
         # Tokens without plan access still get the summary; raw_output_restricted
         # tells "hidden" apart from a check that had no output.
+        # The unmanaged resource list is gated the same way as the plan output.
         if current_api_token.can_read_plan_output?
-          json.merge(raw_output: check.raw_output)
+          json = json.merge(raw_output: check.raw_output)
+          if check.reports_inventory?
+            json = json.merge(unmanaged_resources: check.unmanaged_resources.order(:id).map(&:api_json))
+          end
+          json
         else
-          json.merge(raw_output_restricted: true)
+          json = json.merge(raw_output_restricted: true)
+          json = json.merge(unmanaged_resources_restricted: true) if check.reports_inventory?
+          json
         end
       end
     end

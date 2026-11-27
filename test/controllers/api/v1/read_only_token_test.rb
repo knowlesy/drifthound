@@ -118,4 +118,25 @@ class Api::V1::ReadOnlyTokenTest < ActionDispatch::IntegrationTest
     get api_v1_projects_path, headers: { "Authorization" => "Bearer invalid-token" }, as: :json
     assert_response :unauthorized
   end
+
+  test "unmanaged resource list follows plan output access" do
+    environment = @project.environments.create!(name: "Azure", key: "prod-azure", status: :drift)
+    check = environment.drift_checks.create!(status: :drift, source: "azure", unmanaged_count: 1, unmanaged_ignored_count: 0)
+    check.unmanaged_resources.create!(identifier: "/subscriptions/secret-sub/resourceGroups/rg1")
+    path = drift_api_v1_project_environment_path(@project.key, environment.key)
+
+    get path, headers: @read_header, as: :json
+    body = response.parsed_body
+    assert_equal true, body["unmanaged_resources_restricted"]
+    assert_not body.key?("unmanaged_resources")
+    assert_equal 1, body["unmanaged_count"]
+    assert_not_includes response.body, "secret-sub"
+
+    [ @read_plans_header, @write_header ].each do |header|
+      get path, headers: header, as: :json
+      body = response.parsed_body
+      assert_equal [ "/subscriptions/secret-sub/resourceGroups/rg1" ], body["unmanaged_resources"].map { |r| r["identifier"] }
+      assert_not body.key?("unmanaged_resources_restricted")
+    end
+  end
 end
