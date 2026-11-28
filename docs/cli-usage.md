@@ -65,7 +65,7 @@ docker run --rm -v "$(pwd)":/infra -w /infra ghcr.io/drifthoundhq/drifthound:v0.
 
 | Option            | Required | Description                                  |
 |-------------------|----------|----------------------------------------------|
-| `--tool`          | Yes      | `terraform`, `terragrunt`, `opentofu`, or `azure` (see [Azure](#azure-unmanaged-resources)) |
+| `--tool`          | Yes      | `terraform`, `terragrunt`, `opentofu`, `azure` (see [Azure](#azure-unmanaged-resources)) or `argocd` (see [Argo CD](#argo-cd-unowned-resources)) |
 | `--project`       | Yes      | Project key                                  |
 | `--environment`   | Yes      | Environment key                              |
 | `--environment-name` | No    | Environment display name. Defaults to the titleized environment key. When given, it also renames an existing environment. |
@@ -85,6 +85,28 @@ The options below apply to `--tool=azure` only.
 | `--state-file`    | One of the two state options | A Terraform state file or `terraform show -json` output. Repeat it for several files. |
 | `--state-tool`    | No       | `terraform` (default), `tofu` or `terragrunt`. The command used by `--state-dir`. |
 | `--include-managed-by` | No  | Also report resources that another Azure service owns (`managedBy`). |
+
+The options below apply to `--tool=argocd` only.
+
+| Option            | Required | Description                                  |
+|-------------------|----------|----------------------------------------------|
+| `--context`       | No       | kubectl context of the cluster to scan. Defaults to the current context. |
+| `--kubeconfig`    | No       | kubeconfig file. Defaults to kubectl's own lookup (or the in-cluster service account). |
+| `--kubectl`       | No       | The kubectl binary (default `kubectl`). |
+| `--cluster-name`  | No       | Name stored as each row's location. Defaults to the context. |
+| `--argocd-context` | No      | Context of the cluster where Argo CD runs, when that is not the scanned cluster (a hub). Needs `--argocd-destination`. |
+| `--argocd-kubeconfig` | No   | kubeconfig used to read the Applications. Defaults to `--kubeconfig`. |
+| `--argocd-namespace` | No    | Namespace of an Argo CD control plane (default `argocd`). Repeat it for several. |
+| `--argocd-destination` | When `--argocd-context` is set | `spec.destination` server or name that means the scanned cluster. Repeat it for several. Default when Argo CD runs in the scanned cluster: `https://kubernetes.default.svc` and `in-cluster`. |
+| `--tracking-method` | No     | `annotation` (default, Argo CD 3 default), `label` or `annotation+label`. Must match Argo CD's `application.resourceTrackingMethod`. |
+| `--instance-label-key` | No  | The label Argo CD uses for the application name (default `app.kubernetes.io/instance`). Only used with `--tracking-method=label`. |
+| `--argocd-installation-id` | No | Only count objects whose `argocd.argoproj.io/installation-id` matches. |
+| `--include-secrets` | No     | Also list Secrets (names and types only, never their data). Off by default. |
+| `--include-platform-managed` | No | Also report objects that AKS or Kubernetes manage itself. |
+| `--exclude-kind`  | No       | A kubectl resource name to skip, such as `widgets.example.com`. Without a group (`deployments`) it matches every group. Repeat it for several. |
+| `--chunk-size`    | No       | `kubectl get --chunk-size` (default 500). |
+| `--request-timeout` | No     | `kubectl --request-timeout` (default `120s`). |
+| `--concurrency`   | No       | Parallel `kubectl get` calls (default 4, 1 to 16). Use 1 on memory-tight jobs. |
 
 ## How It Works
 
@@ -230,6 +252,30 @@ The CLI lists every resource and resource group in the subscriptions with Azure 
 **One environment per source.** Use a separate environment key for Azure, for example `--environment=prod-azure` next to `prod` for Terraform plans. An environment takes its status from its newest check, so mixing sources under one key would make the status flip on every run.
 
 The CLI sends status `ok` when collection succeeds. The server applies the ignore rules and decides the final status: any unmanaged resource that is not ignored makes the check `drift`. See [Azure Unmanaged Resources](azure-unmanaged-resources.md) for the details, including what counts as managed, the built-in ignore list and CI examples.
+
+### Argo CD Unowned Resources
+
+```sh
+drifthound --tool=argocd \
+  --project=platform \
+  --environment=prod-aks-argocd \
+  --token=$TOKEN \
+  --api-url=$URL \
+  --context=prod-aks
+```
+
+The CLI lists the objects in a Kubernetes cluster (such as AKS) with `kubectl`, reads the Argo CD Applications, and reports the objects that no Argo CD Application owns: things created with `kubectl apply` or `helm install`, or left behind by a deleted Application. Only those objects are sent to DriftHound. The CLI projects a fixed set of metadata fields, so it never reads Secret data or the `last-applied-configuration` annotation.
+
+**Prerequisites** (on the machine that runs the CLI):
+
+- `kubectl`, signed in to the cluster with read access (see the RBAC section of [Argo CD Unowned Resources](argocd-unowned-resources.md#rbac)). The Docker image does not include `kubectl`.
+- Argo CD installed in the scanned cluster, or `--argocd-context` and `--argocd-destination` when Argo CD runs elsewhere.
+
+**Fail closed.** If anything fails (a kind cannot be listed, access is forbidden, the Argo CD CRDs are missing, no Application deploys to this cluster, or an output line is not understood), the CLI posts a check with status `error` and no list, so a green check never hides a gap. Use `--exclude-kind` to skip a kind on purpose.
+
+**One environment per source and per cluster.** Use a key such as `--environment=prod-aks-argocd`. An environment takes its status from its newest check, so mixing sources or clusters under one key would make the status flip.
+
+The CLI sends status `ok` when collection succeeds. The server applies the ignore rules and decides the final status: any unowned object that is not ignored makes the check `drift`. See [Argo CD Unowned Resources](argocd-unowned-resources.md) for what counts as owned, the built-in ignore list, RBAC and CI examples.
 
 ## Best Practices
 

@@ -36,6 +36,10 @@ class Api::V1::UnmanagedIgnoreRulesControllerTest < ActionDispatch::IntegrationT
     builtin = body["builtin_rules"]["azure"]
     assert_equal 11, builtin.size
     assert_equal %w[key field match_type pattern note], builtin.first.keys
+    argo = body["builtin_rules"]["argocd"]
+    assert_equal BuiltinIgnoreRules.for("argocd").size, argo.size
+    assert_equal %w[key field match_type pattern note], argo.first.keys
+    assert_includes argo.map { |r| r["key"] }, "kube-root-ca"
   end
 
   test "read token gets built-in rules but not the custom rules" do

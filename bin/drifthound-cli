@@ -547,12 +547,917 @@ module DriftHoundCli
     end
   end
 
-  # EXTENSION POINT: add the other sources here, for example "argocd" => Modes::ArgoUnowned
+  # Finds Kubernetes objects that no Argo CD Application owns. kubectl lists
+  # every kind with a fixed jsonpath projection (never -o json), so secret
+  # data and whole annotations such as last-applied-configuration are never
+  # read. Ownership is decided here, so the server only sees unowned roots.
+  class ArgoError < StandardError; end
+
+  module Argo
+    MAX_STDERR = 4000
+    DEFAULT_INSTANCE_LABEL = 'app.kubernetes.io/instance'
+    TRACKING_METHODS = %w[annotation label annotation+label].freeze
+
+    # Kinds that are never listed: always owned, or churn that Argo CD itself excludes.
+    # The names are in `kubectl api-resources -o name` form.
+    KIND_DENYLIST = %w[
+      events events.events.k8s.io
+      endpoints endpointslices.discovery.k8s.io
+      leases.coordination.k8s.io
+      nodes componentstatuses bindings
+      certificatesigningrequests.certificates.k8s.io
+      controllerrevisions.apps
+      apiservices.apiregistration.k8s.io
+      flowschemas.flowcontrol.apiserver.k8s.io prioritylevelconfigurations.flowcontrol.apiserver.k8s.io
+      csinodes.storage.k8s.io volumeattachments.storage.k8s.io
+      tokenreviews.authentication.k8s.io selfsubjectreviews.authentication.k8s.io
+      subjectaccessreviews.authorization.k8s.io selfsubjectaccessreviews.authorization.k8s.io
+      selfsubjectrulesreviews.authorization.k8s.io localsubjectaccessreviews.authorization.k8s.io
+      policyreports.wgpolicyk8s.io clusterpolicyreports.wgpolicyk8s.io
+      ephemeralreports.reports.kyverno.io clusterephemeralreports.reports.kyverno.io
+      admissionreports.kyverno.io clusteradmissionreports.kyverno.io
+      backgroundscanreports.kyverno.io clusterbackgroundscanreports.kyverno.io
+      updaterequests.kyverno.io
+      ciliumidentities.cilium.io ciliumendpoints.cilium.io ciliumendpointslices.cilium.io ciliumnodes.cilium.io
+      certificaterequests.cert-manager.io
+    ].freeze
+    SECRETS = 'secrets'
+
+    # API groups that are never listed. A discovery failure that names only these groups is tolerated.
+    GROUP_DENYLIST = %w[metrics.k8s.io custom.metrics.k8s.io external.metrics.k8s.io events.k8s.io].freeze
+
+    # One entry per output column: the KubeObject member and its jsonpath.
+    # The instance label path is filled in from --instance-label-key.
+    COLUMNS = [
+      [ :api_version, '.apiVersion' ],
+      [ :kind, '.kind' ],
+      [ :namespace, '.metadata.namespace' ],
+      [ :name, '.metadata.name' ],
+      [ :uid, '.metadata.uid' ],
+      [ :created_at, '.metadata.creationTimestamp' ],
+      [ :owner_refs, '.metadata.ownerReferences[*].uid' ],
+      [ :tracking_id, '.metadata.annotations.argocd\.argoproj\.io/tracking-id' ],
+      [ :installation_id, '.metadata.annotations.argocd\.argoproj\.io/installation-id' ],
+      [ :helm_release, '.metadata.annotations.meta\.helm\.sh/release-name' ],
+      [ :helm_release_ns, '.metadata.annotations.meta\.helm\.sh/release-namespace' ],
+      [ :provisioned_by, '.metadata.annotations.pv\.kubernetes\.io/provisioned-by' ],
+      [ :instance_label, nil ],
+      [ :managed_by, '.metadata.labels.app\.kubernetes\.io/managed-by' ],
+      [ :app_name, '.metadata.labels.app\.kubernetes\.io/name' ],
+      [ :part_of, '.metadata.labels.app\.kubernetes\.io/part-of' ],
+      [ :helm_chart, '.metadata.labels.helm\.sh/chart' ],
+      [ :aks_managedby, '.metadata.labels.kubernetes\.azure\.com/managedby' ],
+      [ :addon_mode, '.metadata.labels.addonmanager\.kubernetes\.io/mode' ],
+      [ :bootstrapping, '.metadata.labels.kubernetes\.io/bootstrapping' ],
+      [ :vct_names, '.spec.volumeClaimTemplates[*].metadata.name' ],
+      [ :claim_ns, '.spec.claimRef.namespace' ],
+      [ :claim_name, '.spec.claimRef.name' ],
+      [ :type, '.type' ]
+    ].freeze
+
+    # These columns are read only for the kinds that need them. A custom resource can hold any
+    # text in a field such as .type, and a tab or newline there would break the row.
+    KIND_COLUMNS = {
+      'statefulsets.apps' => %i[vct_names],
+      'persistentvolumes' => %i[claim_ns claim_name],
+      'secrets' => %i[type]
+    }.freeze
+    KIND_ONLY = KIND_COLUMNS.values.flatten.freeze
+
+    def self.columns_for(resource)
+      COLUMNS.reject { |member, _| KIND_ONLY.include?(member) && !Array(KIND_COLUMNS[resource]).include?(member) }
+    end
+
+    KubeObject = Struct.new(*COLUMNS.map(&:first), keyword_init: true) do
+      def group
+        api_version.include?('/') ? api_version.split('/', 2).first : ''
+      end
+
+      def owner_uids
+        owner_refs.split
+      end
+
+      def cluster_scoped?
+        namespace.empty?
+      end
+
+      def secret_type
+        kind == 'Secret' ? type : ''
+      end
+    end
+
+    # Escapes the dots in a map key, as kubectl jsonpath needs: a.b/c -> a\.b/c
+    def self.jsonpath_key(key)
+      key.gsub('.') { '\\.' }
+    end
+
+    def self.template(instance_label_key = DEFAULT_INSTANCE_LABEL, resource = nil)
+      paths = columns_for(resource).map do |member, path|
+        member == :instance_label ? ".metadata.labels.#{jsonpath_key(instance_label_key)}" : path
+      end
+      '{range .items[*]}' + paths.map { |path| "{#{path}}" }.join('{"\t"}') + '{"\n"}{end}'
+    end
+
+    def self.clip(text)
+      Text.clean(text.to_s.strip)[0, MAX_STDERR]
+    end
+
+    # Parses the output of `kubectl get <resource> -o jsonpath=<template>`. Anything
+    # unexpected is fatal: a skipped line would silently hide a finding.
+    def self.parse_lines(text, resource)
+      objects = []
+      text.to_s.each_line.each_with_index do |line, index|
+        line = line.chomp
+        next if line.strip.empty?
+
+        columns = line.split("\t", -1)
+        members = columns_for(resource).map(&:first)
+        unless columns.size == members.size
+          raise ArgoError, "unexpected output from kubectl get #{resource}: line #{index + 1} has #{columns.size} columns, expected #{members.size}. " \
+                           "An object of #{resource} may hold a tab or newline in a printed field. Skip the kind with --exclude-kind=#{resource} if you do not need it"
+        end
+
+        values = COLUMNS.each_with_object({}) { |(member, _), hash| hash[member] = '' }
+        object = KubeObject.new(**values.merge(members.zip(columns).to_h))
+        raise ArgoError, "kubectl did not report kind for #{resource}" if object.kind.empty?
+        raise ArgoError, "kubectl did not report a name and uid for an object of #{resource}" if object.name.empty? || object.uid.empty?
+
+        objects << object
+      end
+      objects
+    end
+
+    # Runs kubectl through the runner. Selection is by flags, never by environment.
+    class Kubectl
+      def initialize(runner, bin: 'kubectl', kubeconfig: nil, context: nil, timeout: '120s')
+        @runner = runner
+        @bin = bin
+        @kubeconfig = kubeconfig
+        @context = context
+        @timeout = timeout
+      end
+
+      def command(args, with_context: true)
+        cmd = [ @bin ]
+        cmd += [ '--kubeconfig', @kubeconfig ] if @kubeconfig
+        cmd += [ '--context', @context ] if @context && with_context
+        cmd + [ '--request-timeout', @timeout ] + args
+      end
+
+      def run(args, with_context: true)
+        out, err, status = @runner.call(command(args, with_context: with_context))
+        [ Text.clean(out), Text.clean(err), status ]
+      rescue Errno::ENOENT
+        raise ArgoError, "kubectl was not found (#{@bin}); install it or pass --kubectl=PATH"
+      end
+
+      # Returns [resource names in `api-resources -o name` form, notes]
+      def discover(namespaced)
+        out, err, status = run([ 'api-resources', '--verbs=list', "--namespaced=#{namespaced}", '-o', 'name' ])
+        names = out.lines.map(&:strip).reject(&:empty?)
+        return [ names, [] ] if status.success?
+
+        groups = failing_groups(err)
+        unless !names.empty? && !groups.empty? && (groups - GROUP_DENYLIST).empty?
+          raise ArgoError, "kubectl api-resources failed (exit #{status.exitstatus}): #{Argo.clip(err)}"
+        end
+
+        [ names, [ "kubectl api-resources reported errors for #{groups.join(', ')}; those groups are not scanned" ] ]
+      end
+
+      # Only a partial-discovery error is tolerated. Every failing group/version token is read,
+      # including dotless groups (apps/v1) and the core group (v1), so none is dropped silently.
+      def failing_groups(stderr)
+        phrase = 'unable to retrieve the complete list of server APIs'
+        return [] unless stderr.include?(phrase)
+
+        tail = stderr[(stderr.index(phrase) + phrase.size)..-1]
+        tokens = tail.scan(%r{(?:\A|[:,]\s*)((?:[a-z0-9][a-z0-9.-]*/)?v[0-9]+[a-z0-9]*):}).flatten
+        tokens.map { |token| token.include?('/') ? token.split('/', 2).first : '' }.uniq
+      end
+
+      def list(resource, namespaced, chunk_size, template)
+        args = [ 'get', resource ]
+        args << '--all-namespaces' if namespaced
+        run(args + [ '--chunk-size', chunk_size.to_s, '-o', "jsonpath=#{template}" ])
+      end
+
+      def applications
+        run([ 'get', 'applications.argoproj.io', '--all-namespaces', '-o', 'json' ])
+      end
+
+      def current_context
+        out, _err, status = run([ 'config', 'current-context' ], with_context: false)
+        status.success? ? out.strip : nil
+      end
+    end
+
+    # Lists every eligible kind, one kubectl call per kind so a failure names its kind
+    class Inventory
+      Fetch = Struct.new(:resource, :namespaced, :objects, :problem, :message, keyword_init: true)
+      Result = Struct.new(:objects, :listed, :denied, :excluded, :gone, :notes, keyword_init: true)
+
+      def initialize(kubectl, concurrency:, chunk_size:, instance_label_key:, include_secrets:, exclude_kinds:)
+        @kubectl = kubectl
+        @concurrency = concurrency
+        @chunk_size = chunk_size
+        @instance_label_key = instance_label_key
+        @include_secrets = include_secrets
+        @exclude_kinds = exclude_kinds
+      end
+
+      def collect
+        namespaced, notes = @kubectl.discover(true)
+        cluster, cluster_notes = @kubectl.discover(false)
+        targets, denied, excluded = plan(namespaced.map { |n| [ n, true ] } + cluster.map { |n| [ n, false ] })
+        raise ArgoError, 'kubectl api-resources returned no listable kinds' if targets.empty?
+
+        fetches = fetch_all(targets)
+        failures(fetches)
+        gone = fetches.select { |f| f.problem == :gone }.map(&:resource)
+        objects = fetches.flat_map(&:objects)
+        raise ArgoError, 'kubectl returned no objects at all (wrong cluster or no access?)' if objects.empty?
+
+        Result.new(objects: objects, listed: fetches.size - gone.size, denied: denied, excluded: excluded, gone: gone,
+                   notes: notes + cluster_notes)
+      end
+
+      private
+
+      RESOURCE_NAME = /\A[a-z0-9][a-z0-9.-]*\z/.freeze
+
+      # Core group first, then the other groups alphabetically, so uid de-duplication is stable.
+      # A name that is not a plain resource name is never passed to kubectl, and is fatal.
+      def plan(entries)
+        entries = entries.uniq
+        bad = entries.map(&:first).reject { |name| RESOURCE_NAME.match?(name) }
+        raise ArgoError, "kubectl api-resources returned names that are not valid resource names, so the scan would be incomplete: #{bad.first(5).map(&:inspect).join(', ')}" unless bad.empty?
+
+        denied = 0
+        excluded = 0
+        targets = []
+        entries.sort_by { |name, _| [ name.include?('.') ? 1 : 0, name ] }.each do |name, namespaced|
+          group = name.split('.', 2)[1]
+          if GROUP_DENYLIST.include?(group) || KIND_DENYLIST.include?(name) || (name == SECRETS && !@include_secrets)
+            denied += 1
+          elsif excluded?(name)
+            excluded += 1
+          else
+            targets << [ name, namespaced ]
+          end
+        end
+        [ targets, denied, excluded ]
+      end
+
+      # A name without a group (deployments) excludes that resource in every group
+      def excluded?(name)
+        @exclude_kinds.any? { |kind| kind == name || (!kind.include?('.') && name.split('.', 2).first == kind) }
+      end
+
+      def fetch_all(targets)
+        results = Array.new(targets.size)
+        queue = Queue.new
+        targets.each_with_index { |target, index| queue << [ target, index ] }
+        workers = Array.new([ @concurrency, targets.size ].min) do
+          Thread.new do
+            Thread.current.report_on_exception = false
+            while (job = next_job(queue))
+              (name, namespaced), index = job
+              results[index] = fetch(name, namespaced)
+            end
+          end
+        end
+        workers.each(&:value)
+        results
+      end
+
+      def next_job(queue)
+        queue.pop(true)
+      rescue ThreadError
+        nil
+      end
+
+      def fetch(name, namespaced)
+        out, err, status = @kubectl.list(name, namespaced, @chunk_size, Argo.template(@instance_label_key, name))
+        unless status.success?
+          problem = case err
+                    when /forbidden/i then :forbidden
+                    when /doesn't have a resource type|could not find the requested resource|\(NotFound\)/i then :gone
+                    else :error
+                    end
+          return Fetch.new(resource: name, namespaced: namespaced, objects: [], problem: problem,
+                           message: "exit #{status.exitstatus}: #{Argo.clip(err)}")
+        end
+
+        Fetch.new(resource: name, namespaced: namespaced, objects: Argo.parse_lines(out, name))
+      end
+
+      # A kind that cannot be read would silently hide findings, so every failure is fatal.
+      # A kind deleted between discovery and listing is the one exception.
+      def failures(fetches)
+        forbidden = fetches.select { |f| f.problem == :forbidden }.map(&:resource)
+        other = fetches.select { |f| f.problem == :error }
+        return if forbidden.empty? && other.empty?
+
+        parts = []
+        unless forbidden.empty?
+          parts << "access to #{forbidden.size} kind(s) is forbidden: #{forbidden.join(', ')}. " \
+                   'Grant list access (see the RBAC section of the docs) or skip them with --exclude-kind=<resource>'
+        end
+        other.first(5).each { |f| parts << "kubectl get #{f.resource} failed (#{f.message})" }
+        raise ArgoError, parts.join('; ')
+      end
+    end
+
+    # The Argo CD Applications that deploy to the scanned cluster. Applications of other
+    # clusters are dropped: an ApplicationSet that deploys the same manifests everywhere would
+    # otherwise make one cluster's resource list mark another cluster's objects as owned.
+    class Applications
+      attr_reader :instance_names, :destination_namespaces, :in_scope_count
+
+      def self.parse(text, destinations:, argo_namespaces:)
+        body = JSON.parse(text.to_s)
+        items = body.is_a?(Hash) ? body['items'] : body
+        raise ArgoError, 'kubectl get applications returned an unexpected JSON shape' unless items.is_a?(Array) && items.all? { |item| item.is_a?(Hash) }
+
+        new(items, destinations, argo_namespaces)
+      rescue JSON::ParserError
+        raise ArgoError, 'kubectl get applications did not return valid JSON'
+      end
+
+      def self.label_value(value)
+        value.to_s[0, 63].sub(/[^A-Za-z0-9]+\z/, '')
+      end
+
+      def initialize(items, destinations, argo_namespaces)
+        wanted = destinations.map { |d| d.to_s.chomp('/').downcase }
+        @instance_names = Set.new
+        @label_values = Set.new
+        @destination_namespaces = Set.new
+        @keys = Set.new
+        @cluster_keys = Set.new
+        @in_scope_count = 0
+        seen = Set.new
+        @namespaced_apps = []
+
+        items.each do |app|
+          destination = dig(app, 'spec', 'destination')
+          server = destination['server'].to_s
+          dest_name = destination['name'].to_s
+          seen << (server.empty? ? dest_name : server)
+          next unless [ server, dest_name ].any? { |d| !d.empty? && wanted.include?(d.chomp('/').downcase) }
+
+          @in_scope_count += 1
+          add_application(app, destination, argo_namespaces)
+        end
+
+        add_unambiguous_bare_names(items)
+        raise ArgoError, 'no Argo CD Applications were found (are the Argo CD CRDs installed in this cluster?)' if items.empty?
+        raise ArgoError, "no Argo CD Application deploys to #{destinations.join(' or ')}; Applications target: #{seen.to_a.sort.join(', ')}" if @in_scope_count.zero?
+      end
+
+      # label-tracked objects carry the instance name cut to 63 characters
+      def known_label?(value)
+        !value.to_s.empty? && @label_values.include?(self.class.label_value(value))
+      end
+
+      def known_instance?(name)
+        @instance_names.include?(name)
+      end
+
+      def destination_namespace?(name)
+        @destination_namespaces.include?(name)
+      end
+
+      # An object that an in-scope Application lists in status.resources
+      def lists?(object)
+        group = object.group.downcase
+        kind = object.kind.downcase
+        if object.cluster_scoped?
+          @cluster_keys.include?("#{group}/#{kind}/#{object.name.downcase}")
+        else
+          @keys.include?("#{group}/#{kind}/#{object.namespace.downcase}/#{object.name.downcase}")
+        end
+      end
+
+      private
+
+      def dig(hash, *path)
+        value = path.inject(hash) { |node, key| node.is_a?(Hash) ? node[key] : nil }
+        value.is_a?(Hash) ? value : {}
+      end
+
+      # Argo CD names an application <namespace>_<name> in tracking markers unless its namespace is the
+      # control plane's. With a control plane namespace that was not given (--argocd-namespace), the
+      # markers carry the bare name, so a bare name is accepted when only one application has it.
+      def add_unambiguous_bare_names(_items)
+        counts = Hash.new(0)
+        @namespaced_apps.each { |name, _instance| counts[name] += 1 }
+        @bare_counts = counts
+        @namespaced_apps.each do |name, instance|
+          next if name == instance || counts[name] != 1 || @instance_names.include?(name)
+
+          @instance_names << name
+          @label_values << self.class.label_value(name)
+        end
+      end
+
+      def add_application(app, destination, argo_namespaces)
+        meta = dig(app, 'metadata')
+        namespace = meta['namespace'].to_s
+        name = meta['name'].to_s
+        instance = namespace.empty? || argo_namespaces.include?(namespace) ? name : "#{namespace}_#{name}"
+        @instance_names << instance
+        @namespaced_apps << [ name, instance ]
+        @label_values << self.class.label_value(instance)
+        @destination_namespaces << destination['namespace'].to_s unless destination['namespace'].to_s.empty?
+
+        resources = dig(app, 'status')['resources']
+        Array(resources).each do |entry|
+          next unless entry.is_a?(Hash) && !entry['kind'].to_s.empty? && !entry['name'].to_s.empty?
+
+          group = entry['group'].to_s.downcase
+          kind = entry['kind'].to_s.downcase
+          @cluster_keys << "#{group}/#{kind}/#{entry['name'].to_s.downcase}"
+          @keys << "#{group}/#{kind}/#{entry['namespace'].to_s.downcase}/#{entry['name'].to_s.downcase}"
+        end
+      end
+    end
+
+    # Decides from the markers on a live object whether Argo CD owns it, the way Argo CD does
+    module Tracking
+      Verdict = Struct.new(:owned, :reason, :group_mismatch) do
+        def owned?
+          owned
+        end
+      end
+
+      OWNED = Verdict.new(true, nil, false).freeze
+
+      def self.unowned(reason)
+        Verdict.new(false, reason, false)
+      end
+
+      # Parses <app>:<group>/<kind>:<namespace>/<name>. Returns nil when it is not in that shape.
+      def self.parse_tracking_id(value)
+        parts = value.to_s.split(':', 3)
+        return nil unless parts.size == 3 && !parts[0].empty?
+
+        group_kind = parts[1].split('/', -1)
+        namespace_name = parts[2].split('/', -1)
+        return nil unless group_kind.size == 2 && namespace_name.size == 2 && !group_kind[1].empty? && !namespace_name[1].empty?
+
+        { app: parts[0], group: group_kind[0], kind: group_kind[1], namespace: namespace_name[0], name: namespace_name[1] }
+      end
+
+      def self.owner(object, apps:, method:, installation_id: nil)
+        method == 'label' ? label_owner(object, apps) : annotation_owner(object, apps, installation_id)
+      end
+
+      def self.label_owner(object, apps)
+        return unowned('untracked') if object.instance_label.empty?
+
+        apps.known_label?(object.instance_label) ? OWNED : unowned('unknown-application')
+      end
+
+      # annotation and annotation+label use the annotation alone; the label is informational then
+      def self.annotation_owner(object, apps, installation_id)
+        return unowned('untracked') if object.tracking_id.empty?
+        return unowned('installation-id-mismatch') if installation_id && object.installation_id != installation_id
+
+        parsed = parse_tracking_id(object.tracking_id)
+        return unowned('invalid-tracking-id') unless parsed
+
+        # A cluster-scoped object carries the destination namespace in the annotation
+        same = parsed[:kind] == object.kind && parsed[:name] == object.name && (parsed[:namespace] == object.namespace || object.namespace.empty?)
+        return unowned('not-self-referenced') unless same
+        return unowned('unknown-application') unless apps.known_instance?(parsed[:app])
+
+        # Argo CD compares against the desired object, whose group may differ after an API group move
+        Verdict.new(true, nil, parsed[:group] != object.group)
+      end
+
+      # Argo CD 2.x tracks by label. Run with annotation tracking against such a cluster, nearly
+      # everything would look unowned, so refuse to report instead of raising a false alarm.
+      def self.check_method!(objects, apps, method)
+        return unless method == 'annotation'
+        return if objects.any? { |object| parse_tracking_id(object.tracking_id) }
+        return unless objects.any? { |object| apps.known_label?(object.instance_label) }
+
+        raise ArgoError, 'no object carries an Argo CD tracking annotation, but objects carry the instance label of known Applications; ' \
+                         'this Argo CD may use label tracking, so pass --tracking-method=label (and --instance-label-key if it is customised)'
+      end
+    end
+
+    # Sorts every listed object into an ownership bucket; the first matching bucket wins.
+    # Only roots that nothing owns are reported: children are counted on their root.
+    class Classifier
+      BUCKETS = %i[duplicate dependent tracked listed app_namespace control_plane platform derived_storage unowned].freeze
+      MAX_OWNER_DEPTH = 10
+      Entry = Struct.new(:object, :reason, :dependents)
+      Result = Struct.new(:entries, :counts, :owner_not_listed, :group_mismatches, :markers, :unknown_markers)
+
+      def initialize(objects, apps:, method:, installation_id:, argo_namespaces:, include_platform_managed:)
+        @apps = apps
+        @method = method
+        @installation_id = installation_id
+        @argo_namespaces = argo_namespaces
+        @platform_managed = !include_platform_managed
+        @counts = BUCKETS.each_with_object({}) { |bucket, hash| hash[bucket] = 0 }
+        @objects = dedupe(objects)
+        @by_uid = @objects.each_with_object({}) { |object, hash| hash[object.uid] = object }
+        @dependents = Hash.new(0)
+        @owner_not_listed = 0
+        @group_mismatches = 0
+        @markers = 0
+        @unknown_markers = 0
+        index_namespaces
+        index_stateful_sets
+      end
+
+      def call
+        @objects.each { |object| count_dependent(object) if dependent?(object) }
+        entries = []
+        @objects.each do |object|
+          bucket, reason = bucket_of(object)
+          @counts[bucket] += 1
+          entries << Entry.new(object, reason, @dependents[object.uid]) if bucket == :unowned
+        end
+        Result.new(entries, @counts, @owner_not_listed, @group_mismatches, @markers, @unknown_markers)
+      end
+
+      private
+
+      # Some objects are served under two groups (events and events.events.k8s.io); the first one wins
+      def dedupe(objects)
+        seen = Set.new
+        objects.select do |object|
+          fresh = seen.add?(object.uid)
+          @counts[:duplicate] += 1 unless fresh
+          fresh
+        end
+      end
+
+      def dependent?(object)
+        !object.owner_uids.empty?
+      end
+
+      # Walks the first owner up to the root and counts the object there
+      def count_dependent(object)
+        current = object
+        seen = Set.new([ object.uid ])
+        MAX_OWNER_DEPTH.times do
+          parent = @by_uid[current.owner_uids.first]
+          if parent.nil?
+            @owner_not_listed += 1
+            return
+          end
+          return @dependents[parent.uid] += 1 unless dependent?(parent)
+          return unless seen.add?(parent.uid)
+
+          current = parent
+        end
+      end
+
+      def index_namespaces
+        @platform_namespaces = Set.new
+        @objects.each do |object|
+          next unless object.kind == 'Namespace' && object.group.empty?
+
+          @platform_namespaces << object.name if object.aks_managedby == 'aks' || !object.addon_mode.empty?
+        end
+      end
+
+      # PVCs of a StatefulSet are named <template>-<statefulset>-<ordinal> and carry no ownerReferences
+      def index_stateful_sets
+        @pvc_prefixes = Hash.new { |hash, key| hash[key] = [] }
+        @objects.each do |object|
+          next unless object.kind == 'StatefulSet' && object.group == 'apps'
+
+          object.vct_names.split.each { |template| @pvc_prefixes[object.namespace] << "#{template}-#{object.name}-" }
+        end
+      end
+
+      def bucket_of(object)
+        return [ :dependent, nil ] if dependent?(object)
+
+        verdict = Tracking.owner(object, apps: @apps, method: @method, installation_id: @installation_id)
+        count_marker(verdict)
+        if verdict.owned?
+          @group_mismatches += 1 if verdict.group_mismatch
+          return [ :tracked, nil ]
+        end
+        return [ :listed, nil ] if @apps.lists?(object)
+        return [ :app_namespace, nil ] if namespace_object?(object) && @apps.destination_namespace?(object.name)
+        return [ :control_plane, nil ] if control_plane?(object)
+        return [ :platform, nil ] if @platform_managed && platform?(object)
+        return [ :derived_storage, nil ] if derived_storage?(object)
+
+        [ :unowned, verdict.reason ]
+      end
+
+      # Tracking markers that are well formed and self-referenced, and how many name an unknown application
+      def count_marker(verdict)
+        return if @method == 'label' || !(verdict.owned? || verdict.reason == 'unknown-application')
+
+        @markers += 1
+        @unknown_markers += 1 unless verdict.owned?
+      end
+
+      def namespace_object?(object)
+        object.kind == 'Namespace' && object.group.empty?
+      end
+
+      # Argo CD's own install is skipped, but Applications and projects are still reported
+      def control_plane?(object)
+        return false if object.group == 'argoproj.io'
+
+        @argo_namespaces.include?(object.namespace) || (namespace_object?(object) && @argo_namespaces.include?(object.name))
+      end
+
+      def platform?(object)
+        object.aks_managedby == 'aks' ||
+          !object.addon_mode.empty? ||
+          object.bootstrapping == 'rbac-defaults' ||
+          object.helm_release.start_with?('aks-managed') ||
+          @platform_namespaces.include?(object.namespace)
+      end
+
+      def derived_storage?(object)
+        return false unless object.group.empty?
+
+        case object.kind
+        when 'PersistentVolume'
+          !object.provisioned_by.empty? && !object.claim_name.empty?
+        when 'PersistentVolumeClaim'
+          @pvc_prefixes[object.namespace].any? { |prefix| object.name.start_with?(prefix) && object.name[prefix.size..-1] =~ /\A\d+\z/ }
+        else
+          false
+        end
+      end
+    end
+
+    # Turns a classified object into the API's item
+    module Items
+      METADATA_LIMIT_BYTES = 1800
+      VALUE_LIMIT = 200
+      DROP_ORDER = %i[labels tracking_id helm_chart helm_release_namespace helm_release secret_type managed_by].freeze
+      IDENTIFIER_LIMIT = 1024
+      FIELD_LIMITS = { resource_type: 255, name: 255, scope: 255, location: 128 }.freeze
+
+      def self.identifier(object)
+        "#{object.group.empty? ? 'core' : object.group}/#{object.kind}/#{object.namespace.empty? ? '_cluster' : object.namespace}/#{object.name}"
+      end
+
+      def self.resource_type(object)
+        object.group.empty? ? object.kind : "#{object.kind}.#{object.group}"
+      end
+
+      def self.clean(value)
+        value.to_s.delete("\u0000")
+      end
+
+      def self.to_item(entry, cluster, instance_label_key)
+        object = entry.object
+        identifier = clean(identifier(object))
+        return nil if identifier.length > IDENTIFIER_LIMIT
+
+        {
+          identifier: identifier,
+          resource_type: clean(resource_type(object))[0, FIELD_LIMITS[:resource_type]],
+          name: clean(object.name)[0, FIELD_LIMITS[:name]],
+          scope: object.namespace.empty? ? nil : clean(object.namespace)[0, FIELD_LIMITS[:scope]],
+          location: clean(cluster)[0, FIELD_LIMITS[:location]],
+          metadata: metadata(entry, instance_label_key)
+        }
+      end
+
+      def self.metadata(entry, instance_label_key)
+        object = entry.object
+        labels = { instance_label_key => object.instance_label, 'app.kubernetes.io/name' => object.app_name,
+                   'app.kubernetes.io/part-of' => object.part_of }.reject { |_key, value| value.empty? }
+        data = {
+          api_version: object.api_version, uid: object.uid, created_at: object.created_at, reason: entry.reason,
+          tracking_id: object.tracking_id, managed_by: object.managed_by, helm_release: object.helm_release,
+          helm_release_namespace: object.helm_release_ns, helm_chart: object.helm_chart,
+          dependents: entry.dependents.positive? ? entry.dependents : nil, secret_type: object.secret_type,
+          labels: labels.empty? ? nil : labels
+        }
+        data = data.reject { |_key, value| value.nil? || value == '' }
+        clamped = false
+        data = data.each_with_object({}) do |(key, value), hash|
+          if value.is_a?(Hash)
+            value = value.each_with_object({}) do |(k, v), labels|
+              clamped ||= clamp?(v) || clamp?(k)
+              labels[clean(k)[0, VALUE_LIMIT]] = clean(v)[0, VALUE_LIMIT]
+            end
+          elsif value.is_a?(String)
+            clamped ||= clamp?(value)
+            value = clean(value)[0, VALUE_LIMIT]
+          end
+          hash[key] = value
+        end
+        # The server measures JSON.generate, so this does too
+        DROP_ORDER.each do |key|
+          break if JSON.generate(data).bytesize <= METADATA_LIMIT_BYTES
+
+          clamped = true
+          data = data.reject { |k, _| k == key }
+        end
+        clamped ? data.merge(truncated: true) : data
+      end
+
+      def self.clamp?(value)
+        value.is_a?(String) && value.length > VALUE_LIMIT
+      end
+    end
+  end
+
+  module Modes
+    class ArgoUnowned
+      TIMEOUT_FORMAT = /\A\d+(ms|s|m|h)?\z/.freeze
+      LABEL_KEY_FORMAT = %r{\A([A-Za-z0-9.-]+/)?[A-Za-z0-9_.-]{1,63}\z}.freeze
+      DEFAULT_DESTINATIONS = %w[https://kubernetes.default.svc in-cluster].freeze
+      CLUSTER_NAME_LIMIT = 128
+      MAX_LISTED = 200
+
+      def self.add_options(parser, opts)
+        parser.on('--context=NAME', 'kubectl context of the cluster to scan (argocd tool)') { |v| opts[:kube_context] = v }
+        parser.on('--kubeconfig=FILE', 'kubeconfig file to use (argocd tool)') { |v| opts[:kubeconfig] = v }
+        parser.on('--kubectl=PATH', 'kubectl binary (default kubectl, argocd tool)') { |v| opts[:kubectl] = v }
+        parser.on('--cluster-name=NAME', 'Name stored as the location (default: the context, argocd tool)') { |v| opts[:cluster_name] = v }
+        parser.on('--argocd-context=NAME', 'kubectl context where Argo CD runs, if not the scanned cluster (argocd tool)') { |v| opts[:argocd_context] = v }
+        parser.on('--argocd-kubeconfig=FILE', 'kubeconfig used to read Applications (argocd tool)') { |v| opts[:argocd_kubeconfig] = v }
+        parser.on('--argocd-namespace=NS', 'Namespace of an Argo CD control plane (repeatable, default argocd, argocd tool)') { |v| (opts[:argo_namespaces] ||= []) << v }
+        parser.on('--argocd-destination=SERVER_OR_NAME', 'Application destination server or name that is this cluster (repeatable, argocd tool)') { |v| (opts[:argo_destinations] ||= []) << v }
+        parser.on('--tracking-method=METHOD', Argo::TRACKING_METHODS.join('|') + ' (default annotation, argocd tool)') { |v| opts[:tracking_method] = v }
+        parser.on('--instance-label-key=KEY', "Label Argo CD uses for the application name (default #{Argo::DEFAULT_INSTANCE_LABEL}, argocd tool)") { |v| opts[:instance_label_key] = v }
+        parser.on('--argocd-installation-id=ID', 'Only count objects carrying this Argo CD installation ID (argocd tool)') { |v| opts[:argo_installation_id] = v }
+        parser.on('--include-secrets', 'Also list Secrets (names and types only, argocd tool)') { opts[:include_secrets] = true }
+        parser.on('--include-platform-managed', 'Also report objects managed by AKS or Kubernetes itself (argocd tool)') { opts[:include_platform_managed] = true }
+        parser.on('--exclude-kind=RESOURCE', 'kubectl resource name to skip, such as foos.example.com; without a group it matches every group (repeatable, argocd tool)') { |v| (opts[:exclude_kinds] ||= []) << v }
+        parser.on('--chunk-size=N', Integer, 'kubectl get --chunk-size (default 500, argocd tool)') { |v| opts[:chunk_size] = v }
+        parser.on('--request-timeout=DURATION', 'kubectl --request-timeout (default 120s, argocd tool)') { |v| opts[:request_timeout] = v }
+        parser.on('--concurrency=N', Integer, 'Parallel kubectl calls (default 4, argocd tool)') { |v| opts[:concurrency] = v }
+      end
+
+      def initialize(opts, runner: DEFAULT_RUNNER)
+        @opts = opts
+        @runner = runner
+        @tracking_method = opts[:tracking_method] || 'annotation'
+        @instance_label_key = opts[:instance_label_key] || Argo::DEFAULT_INSTANCE_LABEL
+        @argo_namespaces = clean_list(opts[:argo_namespaces])
+        @argo_namespaces = [ 'argocd' ] if @argo_namespaces.empty?
+        @destinations = clean_list(opts[:argo_destinations])
+        @exclude_kinds = clean_list(opts[:exclude_kinds]).map(&:downcase)
+        @concurrency = opts[:concurrency] || 4
+        @chunk_size = opts[:chunk_size] || 500
+        @timeout = opts[:request_timeout] || '120s'
+
+        raise UsageError, "Unknown --tracking-method (use #{Argo::TRACKING_METHODS.join(', ')})" unless Argo::TRACKING_METHODS.include?(@tracking_method)
+        raise UsageError, '--argocd-context needs at least one --argocd-destination, so Applications of other clusters are not mistaken for this one' if opts[:argocd_context] && @destinations.empty?
+        raise UsageError, '--concurrency must be between 1 and 16' unless @concurrency.between?(1, 16)
+        raise UsageError, '--chunk-size must be at least 1' unless @chunk_size >= 1
+        raise UsageError, '--request-timeout must be a duration such as 120s' unless TIMEOUT_FORMAT.match?(@timeout)
+        raise UsageError, '--instance-label-key is not a valid label key' unless LABEL_KEY_FORMAT.match?(@instance_label_key)
+      end
+
+      def build_payload
+        start_time = Time.now
+        begin
+          items, summary = collect
+          status = 'ok'
+        rescue ArgoError => e
+          items = nil
+          status = 'error'
+          summary = "Argo CD unowned resource check failed: #{e.message}"
+        rescue StandardError => e
+          items = nil
+          status = 'error'
+          summary = "Argo CD unowned resource check failed: unexpected #{e.class}: #{e.message}"
+        end
+        puts summary
+        puts "Determined status: #{status}"
+        $stdout.flush
+
+        payload = {
+          source: 'argocd',
+          status: status,
+          duration: Time.now - start_time,
+          raw_output: Text.clean(summary)
+        }
+        payload[:directory] = @opts[:dir] if @opts[:dir]
+        payload[:unmanaged_resources] = items if items
+        payload
+      end
+
+      private
+
+      def clean_list(values)
+        Array(values).map { |v| v.to_s.strip }.reject(&:empty?).uniq
+      end
+
+      def kubectl
+        @kubectl ||= Argo::Kubectl.new(@runner, bin: @opts[:kubectl] || 'kubectl', kubeconfig: @opts[:kubeconfig],
+                                                context: @opts[:kube_context], timeout: @timeout)
+      end
+
+      def argo_kubectl
+        Argo::Kubectl.new(@runner, bin: @opts[:kubectl] || 'kubectl', kubeconfig: @opts[:argocd_kubeconfig] || @opts[:kubeconfig],
+                                   context: @opts[:argocd_context] || @opts[:kube_context], timeout: @timeout)
+      end
+
+      def applications
+        out, err, status = argo_kubectl.applications
+        unless status.success?
+          where = @opts[:argocd_context] || @opts[:kube_context] || 'the current context'
+          raise ArgoError, "Argo CD CRDs not found in #{where}: #{Argo.clip(err)}" if err =~ /doesn't have a resource type|\(NotFound\)/i
+
+          raise ArgoError, "kubectl get applications failed (exit #{status.exitstatus}): #{Argo.clip(err)}"
+        end
+
+        destinations = @destinations.empty? ? DEFAULT_DESTINATIONS : @destinations
+        Argo::Applications.parse(out, destinations: destinations, argo_namespaces: @argo_namespaces)
+      end
+
+      def cluster_name
+        name = @opts[:cluster_name] || @opts[:kube_context] || kubectl.current_context || 'in-cluster'
+        name[0, CLUSTER_NAME_LIMIT]
+      end
+
+      def inventory
+        Argo::Inventory.new(kubectl, concurrency: @concurrency, chunk_size: @chunk_size, instance_label_key: @instance_label_key,
+                                     include_secrets: @opts[:include_secrets] ? true : false, exclude_kinds: @exclude_kinds)
+      end
+
+      # Returns [unowned_items, summary_text]; raises ArgoError on any failure
+      def collect
+        cluster = cluster_name
+        apps = applications
+        result = inventory.collect
+        Argo::Tracking.check_method!(result.objects, apps, @tracking_method)
+        classified = Argo::Classifier.new(result.objects, apps: apps, method: @tracking_method, installation_id: @opts[:argo_installation_id],
+                                                          argo_namespaces: @argo_namespaces,
+                                                          include_platform_managed: @opts[:include_platform_managed] ? true : false).call
+        if classified.markers.positive? && classified.unknown_markers * 2 > classified.markers
+          raise ArgoError, "#{classified.unknown_markers} of #{classified.markers} Argo CD tracking markers name applications that are not in scope, " \
+                           'so ownership cannot be judged. Check --argocd-namespace (the control plane namespace), --argocd-destination, --argocd-installation-id and the context'
+        end
+        skipped_long = 0
+        unowned = classified.entries.each_with_object([]) do |entry, list|
+          item = Argo::Items.to_item(entry, cluster, @instance_label_key)
+          item ? list << item : skipped_long += 1
+        end
+        unowned.sort_by! { |item| item[:identifier].downcase }
+        items, dropped = Unmanaged.truncate(unowned, max: MAX_UNMANAGED_RESOURCES)
+
+        [ items, summary(cluster, apps, result, classified, unowned.size, items, dropped, skipped_long) ]
+      end
+
+      def summary(cluster, apps, result, classified, unowned_total, items, dropped, skipped_long)
+        counts = classified.counts
+        lines = []
+        lines << "Cluster: #{cluster}"
+        lines << "Tracking method: #{@tracking_method}; Applications in scope: #{apps.in_scope_count}"
+        lines << "Kinds listed: #{result.listed}; skipped by default: #{result.denied}; excluded with --exclude-kind: #{result.excluded}"
+        lines << "Kinds removed since discovery: #{result.gone.join(', ')}" unless result.gone.empty?
+        result.notes.each { |note| lines << "Note: #{note}" }
+        lines << "Objects scanned: #{result.objects.size} (duplicates dropped: #{counts[:duplicate]})"
+        lines << "Owned by Argo CD: #{counts[:tracked]} tracked, #{counts[:listed]} listed by an Application, #{counts[:app_namespace]} Application namespaces"
+        lines << "Not reported: #{counts[:dependent]} owned by another object (#{classified.owner_not_listed} with an owner that is not listed), " \
+                 "#{counts[:control_plane]} in the Argo CD control plane, #{counts[:platform]} platform managed, #{counts[:derived_storage]} derived storage"
+        lines << "Tracking group mismatches tolerated: #{classified.group_mismatches}" if classified.group_mismatches.positive?
+        lines << "Skipped (identifier longer than #{Argo::Items::IDENTIFIER_LIMIT} characters): #{skipped_long}" if skipped_long.positive?
+        lines << "Unowned objects: #{unowned_total}"
+        helm = helm_releases(items)
+        lines << "Helm releases without Argo CD: #{helm}" unless helm.empty?
+        lines << "Only the first #{MAX_UNMANAGED_RESOURCES} are reported; #{dropped} more were dropped." if dropped.positive?
+        listed = items.first(MAX_LISTED)
+        unless listed.empty?
+          lines << ''
+          listed.each { |item| lines << item[:identifier] }
+          lines << "... and #{items.size - listed.size} more" if items.size > listed.size
+        end
+        lines.join("\n")
+      end
+
+      def helm_releases(items)
+        counts = Hash.new(0)
+        items.each do |item|
+          release = item[:metadata][:helm_release]
+          counts[release] += 1 if release
+        end
+        counts.sort.map { |release, count| "#{release} (#{count})" }.join(', ')
+      end
+    end
+  end
+
   MODES = {
     'terraform' => Modes::Plan,
     'terragrunt' => Modes::Plan,
     'opentofu' => Modes::Plan,
-    'azure' => Modes::AzureUnmanaged
+    'azure' => Modes::AzureUnmanaged,
+    'argocd' => Modes::ArgoUnowned
   }.freeze
 
   def self.build_parser(opts)
