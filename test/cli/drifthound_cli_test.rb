@@ -150,6 +150,20 @@ class DriftHoundCliTest < ActiveSupport::TestCase
     assert_equal({ "channel_type" => "slack", "enabled" => true, "config" => { "channel" => "#drift" } }, body["notification_channel"])
   end
 
+  test "Reporter prints the status the server recorded" do
+    Net::HTTP.stubs(:start).returns(Struct.new(:code, :body).new("201", { status: "drift", unmanaged_count: 2 }.to_json))
+    out, _ = capture_io { assert_equal 0, DriftHoundCli::Reporter.post(OPTS, { status: "ok", source: "azure" }) }
+    assert_match(/^Recorded status: drift$/, out)
+
+    Net::HTTP.stubs(:start).returns(Struct.new(:code, :body).new("201", "not json"))
+    out, _ = capture_io { assert_equal 0, DriftHoundCli::Reporter.post(OPTS, { status: "ok" }) }
+    assert_no_match(/Recorded status/, out)
+
+    Net::HTTP.stubs(:start).returns(Struct.new(:code, :body).new("422", { status: "error" }.to_json))
+    out, _ = capture_io { assert_equal 1, DriftHoundCli::Reporter.post(OPTS, { status: "ok" }) }
+    assert_no_match(/Recorded status/, out)
+  end
+
   test "Reporter returns 1 for HTTP errors and for connection failures" do
     Net::HTTP.stubs(:start).returns(Struct.new(:code, :body).new("422", "{}"))
     capture_io { assert_equal 1, DriftHoundCli::Reporter.post(OPTS, { status: "ok" }) }

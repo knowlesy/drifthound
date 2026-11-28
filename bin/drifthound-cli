@@ -156,12 +156,25 @@ module DriftHoundCli
 
         res = Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == 'https') { |http| http.request(req) }
         puts "Response: #{res.code} #{res.body}"
+        recorded = recorded_status(res)
+        puts "Recorded status: #{recorded}" if recorded
       rescue StandardError => e
         puts "Error sending API request: #{e.class} - #{e.message}"
         return 1
       end
 
       res.code.to_i >= 400 ? 1 : 0
+    end
+
+    # The server can change the status it was sent: an unmanaged check that ran cleanly
+    # is recorded as drift when resources remain after the environment's ignore rules.
+    def self.recorded_status(res)
+      return nil if res.code.to_i >= 400
+
+      body = JSON.parse(res.body.to_s)
+      body['status'] if body.is_a?(Hash) && body['status'].is_a?(String)
+    rescue JSON::ParserError
+      nil
     end
   end
 
