@@ -225,4 +225,39 @@ class Api::V1::ChecksControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
     assert_equal [ nil, "develop" ], response.parsed_body["checks"].map { |c| c["branch"] }
   end
+
+  test "checks include source and unmanaged counts" do
+    legacy = create_check(@env, at: 3.days.ago)
+    azure = create_check(@env, at: 1.day.ago, status: :drift, source: "azure", unmanaged_count: 3, unmanaged_ignored_count: 2)
+
+    environment_checks
+
+    checks = response.parsed_body["checks"].index_by { |c| c["id"] }
+    assert_equal "terraform", checks[legacy.id]["source"]
+    assert_nil checks[legacy.id]["unmanaged_count"]
+    assert_equal "azure", checks[azure.id]["source"]
+    assert_equal 3, checks[azure.id]["unmanaged_count"]
+    assert_equal 2, checks[azure.id]["unmanaged_ignored_count"]
+    assert_equal "3 unmanaged", checks[azure.id]["change_summary"]
+  end
+
+  test "source filter applies to environment and global history" do
+    terraform = create_check(@env, at: 3.days.ago)
+    azure = create_check(@env, at: 1.day.ago, source: "azure", unmanaged_count: 0, unmanaged_ignored_count: 0)
+
+    environment_checks(source: "azure")
+    assert_equal [ azure.id ], response.parsed_body["checks"].map { |c| c["id"] }
+
+    get api_v1_checks_path, params: { source: "terraform" }, headers: @auth_header
+    assert_response :success
+    assert_equal [ terraform.id ], response.parsed_body["checks"].map { |c| c["id"] }
+  end
+
+  test "invalid source filter returns bad request" do
+    environment_checks(source: "bogus")
+    assert_response :bad_request
+
+    get api_v1_checks_path, params: { source: [ "azure", "terraform" ] }, headers: @auth_header
+    assert_response :bad_request
+  end
 end

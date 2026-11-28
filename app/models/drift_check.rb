@@ -8,6 +8,15 @@ class DriftCheck < ApplicationRecord
     error: 3
   }
 
+  enum :source, {
+    terraform: "terraform",
+    azure: "azure",
+    argocd: "argocd"
+  }, prefix: true, validate: true, default: "terraform"
+
+  has_many :unmanaged_resources, dependent: :delete_all
+
+  MAX_UNMANAGED_RESOURCES = 5000
   BRANCH_MAX_LENGTH = 255
   INVALID_BRANCH_PATTERN = %r{[\x00-\x20\x7f~^:?*\[\\]|\.\.|@\{|//|/\.|\.lock(?:/|\z)|\A[-/.]|[/.]\z}
 
@@ -32,15 +41,42 @@ class DriftCheck < ApplicationRecord
   # Delegate project access for convenience
   delegate :project, to: :environment
 
-  def change_summary
-    return nil unless drift?
-    return "No changes specified" if add_count.nil? && change_count.nil? && destroy_count.nil?
+  # True when the check sent an unmanaged-resource inventory (even an empty one)
+  def reports_inventory?
+    !unmanaged_count.nil?
+  end
 
+  # Decides the final status before the record is created. "error" always wins,
+  # any non-ignored unmanaged resource makes the check drift, otherwise the
+  # reported status is kept. Returns nil when no status can be determined.
+  def self.resolve_status(reported:, source:, unmanaged_count:)
+    reported = reported.presence || (source.to_s == "terraform" ? nil : "ok")
+    return nil if reported.nil?
+
+    # Same rules as the status enum: a name, or an integer value (as before this check existed)
+    reported = statuses.key(reported) if reported.is_a?(Integer) && statuses.value?(reported)
+    raise ArgumentError, "'#{reported}' is not a valid status" unless reported.is_a?(String) && statuses.key?(reported)
+
+    return "error" if reported == "error"
+    return "drift" if unmanaged_count.to_i > 0
+
+    reported
+  end
+
+  def summary_parts
     parts = []
     parts << "#{add_count} to add" if add_count && add_count > 0
     parts << "#{change_count} to change" if change_count && change_count > 0
     parts << "#{destroy_count} to destroy" if destroy_count && destroy_count > 0
+    parts << "#{unmanaged_count} unmanaged" if unmanaged_count && unmanaged_count > 0
+    parts
+  end
 
+  def change_summary
+    return nil unless drift?
+    return "No changes specified" if add_count.nil? && change_count.nil? && destroy_count.nil? && unmanaged_count.nil?
+
+    parts = summary_parts
     parts.any? ? parts.join(", ") : "No changes"
   end
 

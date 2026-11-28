@@ -26,6 +26,7 @@ Rails.application.routes.draw do
           member do
             get :drift
           end
+          resources :ignore_rules, only: [ :index, :create, :destroy ], controller: "unmanaged_ignore_rules"
         end
       end
     end
@@ -66,4 +67,7 @@ Rails.application.routes.draw do
   delete "projects/:project_key/environments/:key", to: "environments#destroy"
   delete "projects/:project_key/environments/:key/checks", to: "drift_checks#clear", as: :project_environment_checks
   delete "projects/:project_key/environments/:key/checks/:id", to: "drift_checks#destroy", as: :project_environment_check
+  get "projects/:project_key/environments/:key/checks/:id/unmanaged", to: "drift_checks#unmanaged", as: :project_environment_check_unmanaged
+  post "projects/:project_key/environments/:key/ignore_rules", to: "unmanaged_ignore_rules#create", as: :project_environment_ignore_rules
+  delete "projects/:project_key/environments/:key/ignore_rules/:id", to: "unmanaged_ignore_rules#destroy", as: :project_environment_ignore_rule
 end

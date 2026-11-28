@@ -23,7 +23,7 @@ docker run --rm \
   -v "$(pwd)":/infra \
   -w /infra \
   ghcr.io/drifthoundhq/drifthound:<tag> \
-  bin/drifthound-cli --tool=terraform|terragrunt|opentofu \
+  bin/drifthound-cli --tool=terraform|terragrunt|opentofu|azure \
     --project=PROJECT_KEY \
     --environment=ENV_KEY \
     --token=API_TOKEN \
@@ -38,7 +38,7 @@ This mounts your current directory into the container and runs the CLI as if it 
 ## Basic Usage
 
 ```sh
-drifthound --tool=terraform|terragrunt|opentofu \
+drifthound --tool=terraform|terragrunt|opentofu|azure \
   --project=PROJECT_KEY \
   --environment=ENV_KEY \
   --token=API_TOKEN \
@@ -65,7 +65,7 @@ docker run --rm -v "$(pwd)":/infra -w /infra ghcr.io/drifthoundhq/drifthound:v0.
 
 | Option            | Required | Description                                  |
 |-------------------|----------|----------------------------------------------|
-| `--tool`          | Yes      | `terraform`, `terragrunt`, or `opentofu`     |
+| `--tool`          | Yes      | `terraform`, `terragrunt`, `opentofu`, or `azure` (see [Azure](#azure-unmanaged-resources)) |
 | `--project`       | Yes      | Project key                                  |
 | `--environment`   | Yes      | Environment key                              |
 | `--environment-name` | No    | Environment display name. Defaults to the titleized environment key. When given, it also renames an existing environment. |
@@ -75,6 +75,16 @@ docker run --rm -v "$(pwd)":/infra -w /infra ghcr.io/drifthoundhq/drifthound:v0.
 | `--repository`    | No       | Repository URL. **Auto-detected from git** if not provided. Stored in project on first call only; update via GUI. |
 | `--branch`        | No       | Repository branch. **Auto-detected from git** if not provided. Stored on every check, and in the project on first call only. |
 | `--slack-channel` | No       | Slack Channel to send notifications to       |
+
+The options below apply to `--tool=azure` only.
+
+| Option            | Required | Description                                  |
+|-------------------|----------|----------------------------------------------|
+| `--subscription`  | Yes      | Azure subscription ID to scan. Repeat it for several subscriptions. |
+| `--state-dir`     | One of the two state options | Directory to run `<state-tool> state pull` in. Repeat it for several stacks. |
+| `--state-file`    | One of the two state options | A Terraform state file or `terraform show -json` output. Repeat it for several files. |
+| `--state-tool`    | No       | `terraform` (default), `tofu` or `terragrunt`. The command used by `--state-dir`. |
+| `--include-managed-by` | No  | Also report resources that another Azure service owns (`managedBy`). |
 
 ## How It Works
 
@@ -193,6 +203,33 @@ drifthound --tool=opentofu \
 ```
 
 The CLI runs `tofu plan -detailed-exitcode` and parses the output.
+
+### Azure Unmanaged Resources
+
+```sh
+drifthound --tool=azure \
+  --project=my-project \
+  --environment=prod-azure \
+  --token=$TOKEN \
+  --api-url=$URL \
+  --subscription=00000000-0000-0000-0000-000000000000 \
+  --state-dir=stacks/network \
+  --state-dir=stacks/app
+```
+
+The CLI lists every resource and resource group in the subscriptions with Azure Resource Graph, reads the resource IDs from your Terraform state, and reports the resources that are in Azure but not in state. Only the unmanaged items are sent to DriftHound: the server never receives Azure credentials or Terraform state.
+
+**Prerequisites** (on the machine that runs the CLI):
+
+- The Azure CLI (`az`) with the `resource-graph` extension (`az extension add --name resource-graph`). The Docker image does not include `az`, so use the installed CLI.
+- A signed-in identity (`az login`, or OIDC with `azure/login` in GitHub Actions) with the Reader role on each subscription.
+- Initialised state: run `terraform init` in each `--state-dir` first, or export state to files for `--state-file`.
+
+**Fail closed.** If anything fails (a state source cannot be read, an Azure query fails, a requested subscription is not visible to the identity, or no managed IDs are found in state), the CLI posts a check with status `error` and no list. A partial state set would otherwise make everything look unmanaged and raise a false alarm. The error text is in the check's output.
+
+**One environment per source.** Use a separate environment key for Azure, for example `--environment=prod-azure` next to `prod` for Terraform plans. An environment takes its status from its newest check, so mixing sources under one key would make the status flip on every run.
+
+The CLI sends status `ok` when collection succeeds. The server applies the ignore rules and decides the final status: any unmanaged resource that is not ignored makes the check `drift`. See [Azure Unmanaged Resources](azure-unmanaged-resources.md) for the details, including what counts as managed, the built-in ignore list and CI examples.
 
 ## Best Practices
 

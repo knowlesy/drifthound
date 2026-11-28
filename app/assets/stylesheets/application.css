@@ -3192,6 +3192,89 @@ h1, h2, h3 {
   margin-left: 0.5rem;
 }
 
+/* ===== Unmanaged resources ===== */
+.unmanaged-list {
+  margin-top: 1rem;
+  color: #e2e8f0;
+  font-size: 0.8125rem;
+}
+
+.unmanaged-title {
+  font-size: 0.9rem;
+  margin: 0 0 0.5rem;
+}
+
+.unmanaged-counts {
+  margin-left: 0.5rem;
+  font-weight: 400;
+  opacity: 0.8;
+}
+
+.unmanaged-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.5rem 0;
+}
+
+.unmanaged-table th,
+.unmanaged-table td {
+  text-align: left;
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: top;
+}
+
+.unmanaged-identifier {
+  font-family: "SF Mono", Monaco, "Cascadia Code", monospace;
+  word-break: break-all;
+}
+
+.unmanaged-empty,
+.unmanaged-note,
+.unmanaged-loading {
+  color: var(--color-text-muted);
+}
+
+.unmanaged-ignored,
+.builtin-rules {
+  margin-top: 0.75rem;
+}
+
+.ignore-rules {
+  margin-top: 2rem;
+}
+
+.ignore-rules .unmanaged-table {
+  color: var(--color-text);
+}
+
+.ignore-rule-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.75rem 0;
+}
+
+.ignore-rule-form input[type="text"] {
+  flex: 1 1 14rem;
+}
+
+.table-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.ignore-rule-form input,
+.ignore-rule-form select {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Wide tables scroll inside .table-scroll instead of squeezing the identifier column */
+.table-scroll > .unmanaged-table {
+  min-width: 40rem;
+}
+
 /* Keep the dashboard filter bar inside the viewport on phones */
 @media (max-width: 600px) {
   .detail-filters {

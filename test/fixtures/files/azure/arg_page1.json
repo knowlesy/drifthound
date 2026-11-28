@@ -1,0 +1,51 @@
+{
+  "count": 4,
+  "data": [
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-app",
+      "name": "rg-app",
+      "type": "microsoft.resources/subscriptions/resourcegroups",
+      "location": "westeurope",
+      "resourceGroup": "rg-app",
+      "subscriptionId": "00000000-0000-0000-0000-000000000001",
+      "managedBy": "",
+      "tags": null
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-app/providers/Microsoft.Storage/storageAccounts/stapp",
+      "name": "stapp",
+      "type": "microsoft.storage/storageaccounts",
+      "location": "westeurope",
+      "resourceGroup": "rg-app",
+      "subscriptionId": "00000000-0000-0000-0000-000000000001",
+      "managedBy": "",
+      "tags": {
+        "env": "prod"
+      }
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-app/providers/Microsoft.Storage/storageAccounts/stmanual",
+      "name": "stmanual",
+      "type": "microsoft.storage/storageaccounts",
+      "location": "westeurope",
+      "resourceGroup": "rg-app",
+      "subscriptionId": "00000000-0000-0000-0000-000000000001",
+      "managedBy": "",
+      "tags": {
+        "owner": "alice"
+      }
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-manual",
+      "name": "rg-manual",
+      "type": "microsoft.resources/subscriptions/resourcegroups",
+      "location": "northeurope",
+      "resourceGroup": "rg-manual",
+      "subscriptionId": "00000000-0000-0000-0000-000000000001",
+      "managedBy": "",
+      "tags": null
+    }
+  ],
+  "skip_token": "FAKE-SKIP-TOKEN-PAGE-2",
+  "total_records": 11
+}

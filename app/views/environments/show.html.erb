@@ -153,16 +153,16 @@
                 <% if check.ok? %>
                   No changes
                 <% elsif check.drift? || check.error? %>
-                  <% parts = [] %>
-                  <% parts << "#{check.add_count} to add" if check.add_count.to_i > 0 %>
-                  <% parts << "#{check.change_count} to change" if check.change_count.to_i > 0 %>
-                  <% parts << "#{check.destroy_count} to destroy" if check.destroy_count.to_i > 0 %>
+                  <% parts = check.summary_parts %>
                   <%= parts.any? ? parts.join(", ") : "—" %>
                 <% else %>
                   —
                 <% end %>
                 <% if check.branch.present? %>
                   <span class="check-branch" title="Branch"><%= check.branch %></span>
+                <% end %>
+                <% unless check.source_terraform? %>
+                  <span class="badge badge-info" title="Check source"><%= check.source %></span>
                 <% end %>
               </span>
               <span class="col-duration">
@@ -176,11 +176,11 @@
                 <%= check.created_at.strftime('%b %d, %I:%M %p') %>
               </span>
               <span class="col-actions">
-                <% if check.raw_output.present? && can_view_plan %>
+                <% if (check.raw_output.present? || check.reports_inventory?) && can_view_plan %>
                   <button class="expand-btn" data-expandable-target="button">
-                    <span class="expand-icon">▶</span> Plan
+                    <span class="expand-icon">▶</span> <%= check.source_terraform? ? "Plan" : "Details" %>
                   </button>
-                <% elsif check.raw_output.present? %>
+                <% elsif check.raw_output.present? || check.reports_inventory? %>
                   <span class="no-output plan-restricted" title="Plan output is restricted to higher roles">Plan output restricted</span>
                 <% else %>
                   <span class="no-output">—</span>
@@ -195,9 +195,18 @@
                 <% end %>
               </span>
             </div>
-            <% if check.raw_output.present? && can_view_plan %>
+            <% if (check.raw_output.present? || check.reports_inventory?) && can_view_plan %>
               <div class="check-output" data-expandable-target="content" hidden>
-                <pre><code><%= colorize_plan_output(check.raw_output) %></code></pre>
+                <% if check.raw_output.present? %>
+                  <pre><code><%= colorize_plan_output(check.raw_output) %></code></pre>
+                <% end %>
+                <% if check.reports_inventory? %>
+                  <%= turbo_frame_tag dom_id(check, :unmanaged),
+                        src: project_environment_check_unmanaged_path(@project.key, @environment.key, check),
+                        loading: :lazy do %>
+                    <p class="unmanaged-loading">Loading unmanaged resources…</p>
+                  <% end %>
+                <% end %>
               </div>
             <% end %>
           </div>
@@ -205,4 +214,9 @@
       </div>
     <% end %>
   </section>
+
+  <% if @inventory_sources.any? || @ignore_rules.any? %>
+    <%= render "environments/ignore_rules", environment: @environment, project: @project,
+          rules: @ignore_rules, sources: @inventory_sources %>
+  <% end %>
 </div>

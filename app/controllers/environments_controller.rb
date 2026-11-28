@@ -7,6 +7,8 @@ class EnvironmentsController < ApplicationController
   def show
     authorize @environment
     @drift_checks = @environment.drift_checks.order(created_at: :desc)
+    @ignore_rules = @environment.unmanaged_ignore_rules.order(:id)
+    @inventory_sources = @environment.drift_checks.where.not(source: "terraform").distinct.pluck(:source)
     # Environment-level channel takes precedence, otherwise fall back to project-level
     @slack_channel = @environment.notification_channels.for_type("slack").enabled.first ||
                      @project.notification_channels.for_type("slack").enabled.first

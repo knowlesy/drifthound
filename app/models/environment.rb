@@ -4,6 +4,7 @@ class Environment < ApplicationRecord
   belongs_to :project
   has_many :drift_checks, dependent: :destroy
   has_many :notification_states, dependent: :destroy
+  has_many :unmanaged_ignore_rules, dependent: :delete_all
   has_many :notification_channels, as: :notifiable, dependent: :destroy
 
   scope :included_in_metrics, -> { where(exclude_from_metrics: false) }
@@ -21,7 +22,7 @@ class Environment < ApplicationRecord
 
     DriftCheck
       .where(environment_id: ids)
-      .select("DISTINCT ON (environment_id) id, environment_id, status, add_count, change_count, destroy_count, created_at")
+      .select("DISTINCT ON (environment_id) id, environment_id, status, add_count, change_count, destroy_count, unmanaged_count, source, created_at")
       .order(environment_id: :desc, created_at: :desc, id: :desc)
       .index_by(&:environment_id)
   end

@@ -132,4 +132,25 @@ class EnvironmentsControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
     assert_select "a[href=?]", "https://github.com/org/infra/tree/what%3Fnow/envs/prod"
   end
+
+  test "history shows the unmanaged count and a source badge for non-terraform checks" do
+    @env.drift_checks.create!(status: :ok)
+    @env.drift_checks.create!(status: :drift, source: "azure", unmanaged_count: 4, unmanaged_ignored_count: 1)
+
+    get project_environment_path(@project.key, @env.key)
+
+    assert_response :success
+    assert_select ".check-row", 2
+    assert_select ".col-summary", text: /4 unmanaged/, count: 1
+    assert_select ".col-summary .badge.badge-info", text: "azure", count: 1
+  end
+
+  test "history summary for terraform checks is unchanged" do
+    @env.drift_checks.create!(status: :drift, add_count: 2, change_count: 1, destroy_count: 3)
+
+    get project_environment_path(@project.key, @env.key)
+
+    assert_select ".col-summary", text: /2 to add, 1 to change, 3 to destroy/
+    assert_select ".col-summary .badge", count: 0
+  end
 end

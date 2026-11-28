@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_10_06_130000) do
+ActiveRecord::Schema[8.1].define(version: 2026_11_27_090200) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -35,9 +35,13 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_06_130000) do
     t.text "raw_output"
     t.integer "status"
     t.datetime "updated_at", null: false
+    t.string "source", default: "terraform", null: false
+    t.integer "unmanaged_count"
+    t.integer "unmanaged_ignored_count"
     t.index ["created_at"], name: "index_drift_checks_on_created_at"
     t.index ["environment_id", "created_at", "id"], name: "index_drift_checks_on_environment_id_and_created_at_and_id"
     t.index ["environment_id", "execution_number"], name: "index_drift_checks_on_environment_id_and_execution_number", unique: true
+    t.index ["environment_id", "source", "created_at"], name: "index_drift_checks_on_environment_id_and_source_and_created_at"
     t.index ["environment_id"], name: "index_drift_checks_on_environment_id"
   end
 
@@ -105,6 +109,35 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_06_130000) do
     t.index ["key"], name: "index_projects_on_key", unique: true
   end
 
+  create_table "unmanaged_ignore_rules", force: :cascade do |t|
+    t.bigint "environment_id", null: false
+    t.string "source"
+    t.string "field", default: "identifier", null: false
+    t.string "match_type", default: "glob", null: false
+    t.string "pattern", null: false
+    t.string "note"
+    t.bigint "created_by_id"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["created_by_id"], name: "index_unmanaged_ignore_rules_on_created_by_id"
+    t.index ["environment_id"], name: "index_unmanaged_ignore_rules_on_environment_id"
+  end
+
+  create_table "unmanaged_resources", force: :cascade do |t|
+    t.bigint "drift_check_id", null: false
+    t.string "identifier", null: false
+    t.string "resource_type"
+    t.string "name"
+    t.string "scope"
+    t.string "location"
+    t.jsonb "metadata", default: {}, null: false
+    t.boolean "ignored", default: false, null: false
+    t.string "ignore_reason"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["drift_check_id", "ignored"], name: "index_unmanaged_resources_on_drift_check_id_and_ignored"
+  end
+
   create_table "users", force: :cascade do |t|
     t.datetime "created_at", null: false
     t.string "email"
@@ -121,4 +154,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_06_130000) do
   add_foreign_key "environments", "projects"
   add_foreign_key "invites", "users", column: "created_by_id"
   add_foreign_key "notification_states", "environments"
+  add_foreign_key "unmanaged_ignore_rules", "environments", on_delete: :cascade
+  add_foreign_key "unmanaged_ignore_rules", "users", column: "created_by_id", on_delete: :nullify
+  add_foreign_key "unmanaged_resources", "drift_checks", on_delete: :cascade
 end

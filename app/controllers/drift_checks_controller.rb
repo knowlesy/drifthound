@@ -1,6 +1,7 @@
 class DriftChecksController < ApplicationController
   before_action :set_project_and_environment
-  before_action :require_login
+  before_action :require_login, except: [ :unmanaged ]
+  before_action :require_login_unless_public, only: [ :unmanaged ]
   rescue_from ActiveRecord::RecordNotFound, with: :not_found
 
   def destroy
@@ -18,6 +19,20 @@ class DriftChecksController < ApplicationController
 
     deleted_count = @environment.delete_checks_before(before_date.in_time_zone.beginning_of_day)
     redirect_to environment_path, notice: "Deleted #{deleted_count} #{"check".pluralize(deleted_count)} from before #{before_date.iso8601}"
+  end
+
+  # Lazy-loaded Turbo Frame inside an expanded check row. The list reveals
+  # subscription IDs and resource names, so it is gated like plan output.
+  UNMANAGED_DISPLAY_LIMIT = 1000
+
+  def unmanaged
+    return head :forbidden unless policy(@environment).view_plan?
+
+    @check = @environment.drift_checks.find(params[:id])
+    resources = @check.unmanaged_resources.order(:identifier)
+    @reported = resources.reported.limit(UNMANAGED_DISPLAY_LIMIT).to_a
+    @ignored = resources.ignored_rows.limit(UNMANAGED_DISPLAY_LIMIT).to_a
+    @display_limit = UNMANAGED_DISPLAY_LIMIT
   end
 
   private

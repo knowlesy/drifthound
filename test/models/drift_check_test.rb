@@ -205,4 +205,86 @@ class DriftCheckTest < ActiveSupport::TestCase
       assert_includes check.errors[:branch], "is not a valid git branch name"
     end
   end
+
+  test "source defaults to terraform" do
+    check = @environment.drift_checks.create!(status: :ok)
+    assert check.source_terraform?
+    assert_nil check.unmanaged_count
+    assert_not check.reports_inventory?
+  end
+
+  test "source accepts azure and argocd and rejects unknown values" do
+    assert @environment.drift_checks.create!(status: :ok, source: "azure").source_azure?
+    assert @environment.drift_checks.create!(status: :ok, source: "argocd").source_argocd?
+
+    check = DriftCheck.new(environment: @environment, status: :ok, source: "bogus")
+    assert_not check.valid?
+    assert check.errors[:source].any?
+  end
+
+  test "reports_inventory? is true for zero counts" do
+    assert DriftCheck.new(unmanaged_count: 0).reports_inventory?
+    assert_not DriftCheck.new(unmanaged_count: nil).reports_inventory?
+  end
+
+  test "resolve_status keeps reported status without unmanaged resources" do
+    assert_equal "ok", DriftCheck.resolve_status(reported: "ok", source: "terraform", unmanaged_count: nil)
+    assert_equal "drift", DriftCheck.resolve_status(reported: "drift", source: "terraform", unmanaged_count: 0)
+    assert_equal "unknown", DriftCheck.resolve_status(reported: "unknown", source: "azure", unmanaged_count: 0)
+  end
+
+  test "resolve_status returns nil for a blank terraform status" do
+    assert_nil DriftCheck.resolve_status(reported: nil, source: "terraform", unmanaged_count: nil)
+    assert_nil DriftCheck.resolve_status(reported: "", source: "terraform", unmanaged_count: 3)
+  end
+
+  test "resolve_status defaults to ok for other sources" do
+    assert_equal "ok", DriftCheck.resolve_status(reported: nil, source: "azure", unmanaged_count: 0)
+    assert_equal "ok", DriftCheck.resolve_status(reported: "", source: "argocd", unmanaged_count: nil)
+    assert_equal "drift", DriftCheck.resolve_status(reported: nil, source: "azure", unmanaged_count: 2)
+  end
+
+  test "resolve_status turns ok into drift when unmanaged resources exist" do
+    assert_equal "drift", DriftCheck.resolve_status(reported: "ok", source: "azure", unmanaged_count: 1)
+    assert_equal "drift", DriftCheck.resolve_status(reported: "unknown", source: "azure", unmanaged_count: 1)
+  end
+
+  test "resolve_status never overrides error" do
+    assert_equal "error", DriftCheck.resolve_status(reported: "error", source: "azure", unmanaged_count: 5)
+  end
+
+  test "resolve_status raises for an invalid status with the enum's message" do
+    error = assert_raises(ArgumentError) { DriftCheck.resolve_status(reported: "bogus", source: "azure", unmanaged_count: 0) }
+    assert_equal "'bogus' is not a valid status", error.message
+  end
+
+  test "resolve_status accepts integer status values like the enum does" do
+    assert_equal "ok", DriftCheck.resolve_status(reported: 1, source: "terraform", unmanaged_count: nil)
+    assert_equal "drift", DriftCheck.resolve_status(reported: 2, source: "terraform", unmanaged_count: nil)
+    assert_equal "unknown", DriftCheck.resolve_status(reported: 0, source: "terraform", unmanaged_count: nil)
+    assert_equal "error", DriftCheck.resolve_status(reported: 3, source: "azure", unmanaged_count: 4)
+    assert_raises(ArgumentError) { DriftCheck.resolve_status(reported: 9, source: "terraform", unmanaged_count: nil) }
+    assert_raises(ArgumentError) { DriftCheck.resolve_status(reported: "1", source: "terraform", unmanaged_count: nil) }
+  end
+
+  test "summary_parts lists non-zero parts including unmanaged" do
+    check = DriftCheck.new(add_count: 2, change_count: 1, destroy_count: 3, unmanaged_count: 4)
+    assert_equal [ "2 to add", "1 to change", "3 to destroy", "4 unmanaged" ], check.summary_parts
+    assert_equal [], DriftCheck.new(add_count: 0, unmanaged_count: 0).summary_parts
+  end
+
+  test "change_summary includes unmanaged resources" do
+    check = DriftCheck.new(status: :drift, add_count: 1, unmanaged_count: 3)
+    assert_equal "1 to add, 3 unmanaged", check.change_summary
+
+    only_unmanaged = DriftCheck.new(status: :drift, unmanaged_count: 2)
+    assert_equal "2 unmanaged", only_unmanaged.change_summary
+  end
+
+  test "change_summary is unchanged for checks without an inventory" do
+    assert_equal "No changes specified", DriftCheck.new(status: :drift).change_summary
+    assert_equal "No changes", DriftCheck.new(status: :drift, add_count: 0, change_count: 0, destroy_count: 0).change_summary
+    assert_equal "No changes", DriftCheck.new(status: :drift, unmanaged_count: 0).change_summary
+    assert_nil DriftCheck.new(status: :ok, unmanaged_count: 2).change_summary
+  end
 end

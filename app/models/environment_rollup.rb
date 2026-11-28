@@ -22,6 +22,10 @@ class EnvironmentRollup
       latest_check&.destroy_count.to_i
     end
 
+    def unmanaged_count
+      latest_check&.unmanaged_count.to_i
+    end
+
     def last_checked_at
       environment.last_checked_at
     end

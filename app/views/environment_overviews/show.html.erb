@@ -64,7 +64,7 @@
           </span>
           <span class="col-counts">
             <% if check %>
-              <%= layer.add_count %> / <%= layer.change_count %> / <%= layer.destroy_count %>
+              <%= layer.add_count %> / <%= layer.change_count %> / <%= layer.destroy_count %><% if layer.unmanaged_count > 0 %> · <%= layer.unmanaged_count %> unmanaged<% end %>
             <% else %>
               —
             <% end %>

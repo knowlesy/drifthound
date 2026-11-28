@@ -1,0 +1,51 @@
+{
+  "version": 4,
+  "terraform_version": "1.9.0",
+  "serial": 3,
+  "lineage": "00000000-0000-0000-0000-00000000lin1",
+  "outputs": {},
+  "resources": [
+    {
+      "mode": "managed",
+      "type": "azurerm_resource_group",
+      "name": "x",
+      "provider": "provider[\"registry.terraform.io/hashicorp/azurerm\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000002/resourceGroups/rg-sec"
+          }
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "azurerm_storage_container",
+      "name": "x",
+      "provider": "provider[\"registry.terraform.io/hashicorp/azurerm\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-app/providers/Microsoft.Storage/storageAccounts/stmanual|blob"
+          }
+        }
+      ]
+    },
+    {
+      "mode": "data",
+      "type": "azurerm_resource_group",
+      "name": "x",
+      "provider": "provider[\"registry.terraform.io/hashicorp/azurerm\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-manual"
+          }
+        }
+      ]
+    }
+  ]
+}

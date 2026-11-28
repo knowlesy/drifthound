@@ -1,0 +1,73 @@
+<%= turbo_frame_tag dom_id(@check, :unmanaged) do %>
+  <% can_ignore = policy(UnmanagedIgnoreRule).create? %>
+  <div class="unmanaged-list">
+    <h3 class="unmanaged-title">
+      Unmanaged resources
+      <span class="unmanaged-counts"><%= @check.unmanaged_count %> reported, <%= @check.unmanaged_ignored_count.to_i %> ignored</span>
+    </h3>
+
+    <% if @reported.empty? %>
+      <p class="unmanaged-empty">No unmanaged resources were reported by this check.</p>
+    <% else %>
+      <div class="table-scroll">
+      <table class="unmanaged-table">
+        <thead>
+          <tr>
+            <th>Identifier</th>
+            <th>Type</th>
+            <th>Name</th>
+            <th>Scope</th>
+            <th>Location</th>
+            <% if can_ignore %><th></th><% end %>
+          </tr>
+        </thead>
+        <tbody>
+          <% @reported.each do |resource| %>
+            <tr>
+              <td class="unmanaged-identifier"><%= resource.identifier %></td>
+              <td><%= resource.resource_type %></td>
+              <td><%= resource.name %></td>
+              <td><%= resource.scope %></td>
+              <td><%= resource.location %></td>
+              <% if can_ignore %>
+                <td>
+                  <%= button_to "Ignore", project_environment_ignore_rules_path(@project.key, @environment.key),
+                        method: :post,
+                        class: "btn btn-sm",
+                        params: { unmanaged_ignore_rule: { field: "identifier", match_type: "exact", pattern: resource.identifier, source: @check.source } },
+                        form: { data: { turbo_frame: "_top", expandable_ignore: true } } %>
+                </td>
+              <% end %>
+            </tr>
+          <% end %>
+        </tbody>
+      </table>
+      </div>
+    <% end %>
+
+    <% if @ignored.any? %>
+      <details class="unmanaged-ignored">
+        <summary><%= @check.unmanaged_ignored_count.to_i %> ignored</summary>
+        <div class="table-scroll">
+      <table class="unmanaged-table">
+          <thead>
+            <tr><th>Identifier</th><th>Reason</th></tr>
+          </thead>
+          <tbody>
+            <% @ignored.each do |resource| %>
+              <tr>
+                <td class="unmanaged-identifier"><%= resource.identifier %></td>
+                <td><%= resource.ignore_reason %></td>
+              </tr>
+            <% end %>
+          </tbody>
+        </table>
+      </div>
+      </details>
+    <% end %>
+
+    <% if @reported.size >= @display_limit || @ignored.size >= @display_limit %>
+      <p class="unmanaged-note">Showing the first <%= @display_limit %> rows of each list. Use the API for the full list.</p>
+    <% end %>
+  </div>
+<% end %>

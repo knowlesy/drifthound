@@ -363,4 +363,49 @@ class Api::V1::EnvironmentsControllerTest < ActionDispatch::IntegrationTest
     get api_v1_project_environment_path(@project.key, env.key), headers: @auth_header, as: :json
     assert_equal "release/2.0", response.parsed_body["last_drift_check"]["branch"]
   end
+
+  test "environment summary and drift include source and unmanaged counts and list" do
+    env = @project.environments.create!(name: "Prod Azure", key: "prod-azure", status: :drift)
+    check = env.drift_checks.create!(status: :drift, source: "azure", unmanaged_count: 1, unmanaged_ignored_count: 1)
+    check.unmanaged_resources.create!(identifier: "/subscriptions/0/resourceGroups/b", name: "b")
+    check.unmanaged_resources.create!(identifier: "/subscriptions/0/resourceGroups/a", name: "a", ignored: true, ignore_reason: "Built-in: x")
+
+    get api_v1_project_environment_path(@project.key, env.key), headers: @auth_header, as: :json
+    summary = response.parsed_body["last_drift_check"]
+    assert_equal "azure", summary["source"]
+    assert_equal 1, summary["unmanaged_count"]
+    assert_equal 1, summary["unmanaged_ignored_count"]
+    assert_not summary.key?("unmanaged_resources")
+
+    get drift_api_v1_project_environment_path(@project.key, env.key), headers: @auth_header, as: :json
+    assert_response :success
+    body = response.parsed_body
+    assert_equal "azure", body["source"]
+    assert_equal [ "b", "a" ], body["unmanaged_resources"].map { |r| r["name"] }
+    assert_equal [ false, true ], body["unmanaged_resources"].map { |r| r["ignored"] }
+    assert_equal "Built-in: x", body["unmanaged_resources"].last["ignore_reason"]
+    assert_not body.key?("unmanaged_resources_restricted")
+  end
+
+  test "drift omits the unmanaged list for checks without an inventory" do
+    env = @project.environments.create!(name: "Prod", key: "prod", status: :ok)
+    env.drift_checks.create!(status: :ok)
+
+    get drift_api_v1_project_environment_path(@project.key, env.key), headers: @auth_header, as: :json
+
+    body = response.parsed_body
+    assert_equal "terraform", body["source"]
+    assert_nil body["unmanaged_count"]
+    assert_not body.key?("unmanaged_resources")
+    assert_not body.key?("unmanaged_resources_restricted")
+  end
+
+  test "drift returns an empty list for an empty inventory" do
+    env = @project.environments.create!(name: "Prod Azure", key: "prod-azure", status: :ok)
+    env.drift_checks.create!(status: :ok, source: "azure", unmanaged_count: 0, unmanaged_ignored_count: 0)
+
+    get drift_api_v1_project_environment_path(@project.key, env.key), headers: @auth_header, as: :json
+
+    assert_equal [], response.parsed_body["unmanaged_resources"]
+  end
 end

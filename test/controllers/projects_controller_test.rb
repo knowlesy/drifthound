@@ -63,6 +63,15 @@ class ProjectsControllerTest < ActionDispatch::IntegrationTest
     assert_select ".environment-row .status-text--drift", "DRIFT"
   end
 
+  test "environment row summary includes unmanaged resources" do
+    @environment.drift_checks.create!(status: :drift, source: "azure", unmanaged_count: 5, unmanaged_ignored_count: 0)
+
+    get project_path(@project.key)
+
+    assert_response :success
+    assert_select ".environment-row .col-summary", text: /5 unmanaged/
+  end
+
   test "delete button and modal use a custom project label" do
     post login_path, params: { email: users(:admin).email, password: "testpass1" }
 
